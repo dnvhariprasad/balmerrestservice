@@ -13,6 +13,7 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -223,6 +224,37 @@ public class NoteSheetController {
 
                 JsonNode result = noteSheetService.createPdfNote(processInstanceId, workitemId, sessionId);
                 return ResponseEntity.ok(result);
+        }
+
+        @Operation(summary = "Download Document with Annotations", description = "Downloads a document with all annotations burned into the PDF. "
+                        + "This renders OmniDocs annotations (hyperlinks, lines, stamps, etc.) directly onto the PDF for offline viewing.")
+        @ApiResponses(value = {
+                        @ApiResponse(responseCode = "200", description = "PDF with annotations", content = @Content(mediaType = "application/pdf")),
+                        @ApiResponse(responseCode = "400", description = "Invalid parameters"),
+                        @ApiResponse(responseCode = "404", description = "Document not found or failed to process")
+        })
+        @GetMapping(value = "/downloadwithannotations", produces = MediaType.APPLICATION_PDF_VALUE)
+        public ResponseEntity<byte[]> downloadWithAnnotations(
+                        @Parameter(description = "Document Index", required = true, example = "1664") @RequestParam String documentIndex,
+                        @Parameter(description = "Session ID from login", required = true) @RequestHeader("sessionId") long sessionId) {
+
+                if (documentIndex == null || documentIndex.isEmpty()) {
+                        return ResponseEntity.badRequest().build();
+                }
+
+                byte[] pdfWithAnnotations = noteSheetService.downloadDocumentWithAnnotations(documentIndex, sessionId);
+
+                if (pdfWithAnnotations == null || pdfWithAnnotations.length == 0) {
+                        return ResponseEntity.notFound().build();
+                }
+
+                HttpHeaders headers = new HttpHeaders();
+                headers.setContentType(MediaType.APPLICATION_PDF);
+                headers.setContentDispositionFormData("attachment", "document_" + documentIndex + "_annotated.pdf");
+
+                return ResponseEntity.ok()
+                                .headers(headers)
+                                .body(pdfWithAnnotations);
         }
 
         private JsonNode createError(String message) {

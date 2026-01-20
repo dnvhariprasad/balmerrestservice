@@ -116,3 +116,6 @@ newgenwars/
 __pycache__/
 *.pyc
 *.pyo
+
+# OmniDocs services
+services/
