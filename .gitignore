@@ -109,6 +109,9 @@ frontend/.env.*
 # Local context
 context.md
 
+# Vendor
+newgenwars/
+
 # Python cache
 __pycache__/
 *.pyc
