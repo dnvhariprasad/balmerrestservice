@@ -223,6 +223,22 @@ public class NoteSheetController {
                 }
 
                 JsonNode result = noteSheetService.createPdfNote(processInstanceId, workitemId, sessionId);
+
+                // Check for session expiry and retry once with a fresh session
+                if (!result.path("success").asBoolean(true)) {
+                        String error = result.path("error").asText("").toLowerCase();
+                        String details = result.path("details").asText("").toLowerCase();
+                        if (error.contains("invalid session") || error.contains("401") ||
+                            details.contains("invalid session") || details.contains("401")) {
+                                // Invalidate cached session and retry
+                                sessionManager.invalidateSessionById(sessionId);
+                                sessionId = sessionManager.getServiceSession();
+                                if (sessionId != null) {
+                                        result = noteSheetService.createPdfNote(processInstanceId, workitemId, sessionId);
+                                }
+                        }
+                }
+
                 return ResponseEntity.ok(result);
         }
 
