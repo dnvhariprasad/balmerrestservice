@@ -106,6 +106,9 @@ frontend/.env.*
 # Claude Code
 .claude/
 
+# Local context
+context.md
+
 # Python cache
 __pycache__/
 *.pyc
