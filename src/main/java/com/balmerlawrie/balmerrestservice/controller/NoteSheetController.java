@@ -207,7 +207,8 @@ public class NoteSheetController {
         @PostMapping(value = "/createpdfnote", produces = MediaType.APPLICATION_JSON_VALUE)
         public ResponseEntity<JsonNode> createPdfNote(
                         @Parameter(description = "Work Item ID", required = true, example = "1") @RequestParam String workitemId,
-                        @Parameter(description = "Process Instance ID", required = true, example = "e-Notes-000000000008-process") @RequestParam String processInstanceId) {
+                        @Parameter(description = "Process Instance ID", required = true, example = "e-Notes-000000000008-process") @RequestParam String processInstanceId,
+                        @Parameter(description = "Optional Session ID from login. If not provided, uses service account.") @RequestHeader(value = "sessionId", required = false) Long providedSessionId) {
 
                 if (workitemId == null || workitemId.isEmpty() || processInstanceId == null
                                 || processInstanceId.isEmpty()) {
@@ -215,17 +216,20 @@ public class NoteSheetController {
                                         createError("Missing required parameters: workitemId, processInstanceId"));
                 }
 
-                // Get session using service account credentials from config
-                Long sessionId = sessionManager.getServiceSession();
-                if (sessionId == null) {
-                        return ResponseEntity.status(401)
-                                        .body(createError("Failed to establish service session"));
+                // Use provided session ID or fall back to service account
+                Long sessionId = providedSessionId;
+                if (sessionId == null || sessionId == 0) {
+                        sessionId = sessionManager.getServiceSession();
+                        if (sessionId == null) {
+                                return ResponseEntity.status(401)
+                                                .body(createError("Failed to establish service session"));
+                        }
                 }
 
                 JsonNode result = noteSheetService.createPdfNote(processInstanceId, workitemId, sessionId);
 
-                // Check for session expiry and retry once with a fresh session
-                if (!result.path("success").asBoolean(true)) {
+                // Check for session expiry and retry once with a fresh session (only if using service account)
+                if (providedSessionId == null && !result.path("success").asBoolean(true)) {
                         String error = result.path("error").asText("").toLowerCase();
                         String details = result.path("details").asText("").toLowerCase();
                         if (error.contains("invalid session") || error.contains("401") ||

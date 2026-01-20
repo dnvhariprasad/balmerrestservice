@@ -5,7 +5,7 @@
 BASE_URL="${BALMER_API_URL:-http://localhost:8089}"
 USERNAME="supervisor"
 PASSWORD="Sedin@123456"
-PROCESS_INSTANCE_ID="${1:-e-Notes-000000000044-process}"
+PROCESS_INSTANCE_ID="${1:-e-Notes-000000000047-process}"
 WORKITEM_ID="${2:-1}"
 
 echo "=============================================="
@@ -46,8 +46,9 @@ echo "Step 2: Calling createpdfnote..."
 echo "URL: $BASE_URL/notesheet/createpdfnote"
 echo ""
 
-RESPONSE=$(curl -s -X POST "$BASE_URL/notesheet/createpdfnote?processInstanceId=$PROCESS_INSTANCE_ID&workitemId=$WORKITEM_ID&sessionId=$SESSION_ID" \
-  -H "Content-Type: application/json")
+RESPONSE=$(curl -s -X POST "$BASE_URL/notesheet/createpdfnote?processInstanceId=$PROCESS_INSTANCE_ID&workitemId=$WORKITEM_ID" \
+  -H "Content-Type: application/json" \
+  -H "sessionId: $SESSION_ID")
 
 # Pretty print the response
 echo "Response:"
