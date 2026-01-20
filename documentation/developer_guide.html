@@ -1,0 +1,1738 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Balmer Lawrie Notesheet Service - Developer documentation</title>
+    <style>
+      :root {
+        --primary: #2563eb;
+        --primary-dark: #1e40af;
+        --success: #16a34a;
+        --warning: #ca8a04;
+        --danger: #dc2626;
+        --info: #0891b2;
+        --bg-light: #f8fafc;
+        --bg-dark: #1e293b;
+        --text-primary: #1e293b;
+        --text-secondary: #64748b;
+        --border: #e2e8f0;
+      }
+
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          "Helvetica Neue", Arial, sans-serif;
+        background: var(--bg-light);
+        color: var(--text-primary);
+        line-height: 1.6;
+      }
+
+      .container {
+        max-width: 1400px;
+        margin: 0 auto;
+        padding: 20px;
+      }
+
+      header {
+        background: linear-gradient(
+          135deg,
+          var(--primary),
+          var(--primary-dark)
+        );
+        color: white;
+        padding: 30px 20px;
+        margin-bottom: 30px;
+        border-radius: 12px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+      }
+
+      header h1 {
+        font-size: 2rem;
+        margin-bottom: 8px;
+      }
+
+      header p {
+        opacity: 0.9;
+        font-size: 1.1rem;
+      }
+
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 16px;
+        margin-bottom: 30px;
+      }
+
+      .stat-card {
+        background: white;
+        border-radius: 12px;
+        padding: 20px;
+        text-align: center;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+        border: 1px solid var(--border);
+      }
+
+      .stat-card .number {
+        font-size: 2.5rem;
+        font-weight: 700;
+        color: var(--primary);
+      }
+
+      .stat-card .label {
+        color: var(--text-secondary);
+        font-size: 0.9rem;
+      }
+
+      .toc {
+        background: white;
+        border-radius: 12px;
+        padding: 24px;
+        margin-bottom: 30px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+        border: 1px solid var(--border);
+      }
+
+      .toc h2 {
+        margin-bottom: 16px;
+        color: var(--primary);
+      }
+
+      .toc-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 12px;
+      }
+
+      .toc-item {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px;
+        background: var(--bg-light);
+        border-radius: 8px;
+        text-decoration: none;
+        color: var(--text-primary);
+        transition: all 0.2s;
+      }
+
+      .toc-item:hover {
+        background: var(--primary);
+        color: white;
+        transform: translateX(4px);
+      }
+
+      .toc-item .icon {
+        width: 36px;
+        height: 36px;
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: bold;
+        color: white;
+      }
+
+      .controller-section {
+        background: white;
+        border-radius: 12px;
+        margin-bottom: 24px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+        border: 1px solid var(--border);
+        overflow: hidden;
+      }
+
+      .controller-header {
+        padding: 20px 24px;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        gap: 16px;
+      }
+
+      .controller-header .icon {
+        width: 48px;
+        height: 48px;
+        border-radius: 10px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.5rem;
+        color: white;
+      }
+
+      .controller-header h2 {
+        font-size: 1.4rem;
+      }
+
+      .controller-header .path {
+        font-family: "SF Mono", "Monaco", monospace;
+        font-size: 0.85rem;
+        color: var(--text-secondary);
+      }
+
+      .endpoint {
+        padding: 20px 24px;
+        border-bottom: 1px solid var(--border);
+        transition: background 0.2s;
+      }
+
+      .endpoint:last-child {
+        border-bottom: none;
+      }
+
+      .endpoint:hover {
+        background: #fafbfc;
+      }
+
+      .endpoint-header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 12px;
+        flex-wrap: wrap;
+      }
+
+      .method-badge {
+        padding: 4px 12px;
+        border-radius: 6px;
+        font-size: 0.75rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+
+      .method-get {
+        background: #dcfce7;
+        color: #166534;
+      }
+      .method-post {
+        background: #dbeafe;
+        color: #1e40af;
+      }
+      .method-delete {
+        background: #fee2e2;
+        color: #991b1b;
+      }
+      .method-put {
+        background: #fef3c7;
+        color: #92400e;
+      }
+
+      .endpoint-url {
+        font-family: "SF Mono", "Monaco", monospace;
+        font-size: 1rem;
+        font-weight: 600;
+        color: var(--text-primary);
+      }
+
+      .endpoint-description {
+        color: var(--text-secondary);
+        margin-bottom: 12px;
+        font-size: 0.95rem;
+      }
+
+      .flow-diagram {
+        background: #f1f5f9;
+        border-radius: 8px;
+        padding: 16px;
+        margin-top: 12px;
+      }
+
+      .flow-diagram h4 {
+        font-size: 0.8rem;
+        color: var(--text-secondary);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-bottom: 12px;
+      }
+
+      .flow-steps {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .flow-step {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .flow-node {
+        background: white;
+        border: 2px solid var(--primary);
+        border-radius: 8px;
+        padding: 8px 12px;
+        font-size: 0.85rem;
+        font-weight: 500;
+      }
+
+      .flow-node.service {
+        background: var(--primary);
+        color: white;
+        border-color: var(--primary);
+      }
+
+      .flow-node.external {
+        background: #fef3c7;
+        border-color: #f59e0b;
+      }
+
+      .flow-arrow {
+        color: var(--text-secondary);
+        font-size: 1.2rem;
+      }
+
+      .params-section {
+        margin-top: 12px;
+      }
+
+      .params-section h4 {
+        font-size: 0.8rem;
+        color: var(--text-secondary);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-bottom: 8px;
+      }
+
+      .params-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 8px;
+      }
+
+      .param {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 0.9rem;
+      }
+
+      .param-name {
+        font-family: "SF Mono", "Monaco", monospace;
+        background: #e2e8f0;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-size: 0.85rem;
+      }
+
+      .param-type {
+        color: var(--text-secondary);
+        font-size: 0.8rem;
+      }
+
+      .param-required {
+        color: var(--danger);
+        font-size: 0.75rem;
+        font-weight: 600;
+      }
+
+      footer {
+        text-align: center;
+        padding: 20px;
+        color: var(--text-secondary);
+        font-size: 0.9rem;
+      }
+
+      /* Color coding for controllers */
+      .color-auth {
+        background: #7c3aed;
+      }
+      .color-session {
+        background: #0891b2;
+      }
+      .color-queue {
+        background: #16a34a;
+      }
+      .color-notesheet {
+        background: #ea580c;
+      }
+      .color-docs {
+        background: #db2777;
+      }
+      .color-supporting {
+        background: #6366f1;
+      }
+
+      /* Input/Output code blocks */
+      .io-section {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+        margin-top: 12px;
+      }
+
+      .io-block {
+        background: #1e293b;
+        border-radius: 8px;
+        overflow: hidden;
+      }
+
+      .io-block h5 {
+        background: #334155;
+        color: #94a3b8;
+        padding: 8px 12px;
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin: 0;
+      }
+
+      .io-block pre {
+        color: #e2e8f0;
+        padding: 12px;
+        margin: 0;
+        font-family: "SF Mono", "Monaco", "Consolas", monospace;
+        font-size: 0.8rem;
+        overflow-x: auto;
+        line-height: 1.5;
+      }
+
+      .io-block .key {
+        color: #7dd3fc;
+      }
+
+      .io-block .string {
+        color: #86efac;
+      }
+
+      .io-block .number {
+        color: #fde68a;
+      }
+
+      .io-block .boolean {
+        color: #f9a8d4;
+      }
+
+      @media (max-width: 768px) {
+        .io-section {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <script>
+      mermaid.initialize({ startOnLoad: true, theme: 'default' });
+    </script>
+  </head>
+  <body>
+    <div class="container">
+      <header>
+        <h1>🚀 Balmer Lawrie Notesheet Service - Developer documentation</h1>
+        <p>Complete API reference with implementation flow diagrams</p>
+      </header>
+
+      <div class="stats">
+        <div class="stat-card">
+          <div class="number">7</div>
+          <div class="label">Controllers</div>
+        </div>
+        <div class="stat-card">
+          <div class="number">20</div>
+          <div class="label">Endpoints</div>
+        </div>
+        <div class="stat-card">
+          <div class="number">7</div>
+          <div class="label">Services</div>
+        </div>
+        <div class="stat-card">
+          <div class="number">3</div>
+          <div class="label">Models</div>
+        </div>
+      </div>
+
+      <div class="toc">
+        <h2>📋 Quick Navigation</h2>
+        <div class="toc-grid">
+          <a href="#auth" class="toc-item">
+            <div class="icon color-auth">🔐</div>
+            <div>
+              <strong>Authentication</strong>
+              <div style="font-size: 0.85rem; color: #64748b">
+                Login, Logout, Sessions
+              </div>
+            </div>
+          </a>
+          <a href="#session" class="toc-item">
+            <div class="icon color-session">⏱</div>
+            <div>
+              <strong>Session Management</strong>
+              <div style="font-size: 0.85rem; color: #64748b">
+                Caching, Invalidation
+              </div>
+            </div>
+          </a>
+          <a href="#queue" class="toc-item">
+            <div class="icon color-queue">📥</div>
+            <div>
+              <strong>Queue Management</strong>
+              <div style="font-size: 0.85rem; color: #64748b">
+                My Queue, Common Queue
+              </div>
+            </div>
+          </a>
+          <a href="#notesheet" class="toc-item">
+            <div class="icon color-notesheet">📄</div>
+            <div>
+              <strong>Notesheet Operations</strong>
+              <div style="font-size: 0.85rem; color: #64748b">
+                Original, Annotations, Comments
+              </div>
+            </div>
+          </a>
+          <a href="#docs" class="toc-item">
+            <div class="icon color-docs">📁</div>
+            <div>
+              <strong>Document Operations</strong>
+              <div style="font-size: 0.85rem; color: #64748b">
+                Checkout, Checkin
+              </div>
+            </div>
+          </a>
+          <a href="#supportingdocs" class="toc-item">
+            <div class="icon color-supporting">📎</div>
+            <div>
+              <strong>Supporting Documents</strong>
+              <div style="font-size: 0.85rem; color: #64748b">
+                List Attachments
+              </div>
+            </div>
+          </a>
+        </div>
+      </div>
+
+      <!-- Authentication Section -->
+      <section id="auth" class="controller-section">
+        <div class="controller-header">
+          <div class="icon color-auth">🔐</div>
+          <div>
+            <h2>Authentication</h2>
+            <div class="path">
+              WMConnectController.java, DisconnectController.java
+            </div>
+          </div>
+        </div>
+
+        <div class="endpoint">
+          <div class="endpoint-header">
+            <span class="method-badge method-post">POST</span>
+            <span class="endpoint-url">/login-wmConnectCabinet</span>
+          </div>
+          <p class="endpoint-description">
+            Authenticates user with username and password. Returns session ID
+            and user details.
+          </p>
+          <div class="flow-diagram">
+            <h4>Implementation Flow</h4>
+            <div class="flow-steps">
+              <div class="flow-node">Controller</div>
+              <span class="flow-arrow">→</span>
+              <div class="flow-node service">WMConnectService</div>
+              <span class="flow-arrow">→</span>
+              <div class="flow-node external">iBPS WMConnect</div>
+              <span class="flow-arrow">→</span>
+              <div class="flow-node">SessionId + UserDetails</div>
+            </div>
+          </div>
+          <div class="params-section">
+            <h4>Parameters</h4>
+            <div class="params-grid">
+              <div class="param">
+                <span class="param-name">userName</span>
+                <span class="param-type">Body</span>
+                <span class="param-required">Required</span>
+              </div>
+              <div class="param">
+                <span class="param-name">password</span>
+                <span class="param-type">Body</span>
+                <span class="param-required">Required</span>
+              </div>
+            </div>
+          </div>
+          <div class="io-section">
+            <div class="io-block">
+              <h5>📥 Request Body</h5>
+              <pre>
+{
+  "userName": "supervisor",
+  "password": "Password123"
+}</pre
+              >
+            </div>
+            <div class="io-block">
+              <h5>📤 Response</h5>
+              <pre>
+{
+  "wmConnectResponse": {
+    "Participant": {
+      "SessionId": "-1383533055",
+      "UserName": "supervisor"
+    }
+  },
+  "userDetails": {
+    "userName": "supervisor",
+    "emailId": "admin@company.com"
+  }
+}</pre
+              >
+            </div>
+          </div>
+        </div>
+
+        <div class="endpoint">
+          <div class="endpoint-header">
+            <span class="method-badge method-post">POST</span>
+            <span class="endpoint-url">/disconnect</span>
+          </div>
+          <p class="endpoint-description">
+            Disconnects the user session and logs out the user.
+          </p>
+          <div class="flow-diagram">
+            <h4>Implementation Flow</h4>
+            <div class="flow-steps">
+              <div class="flow-node">Controller</div>
+              <span class="flow-arrow">→</span>
+              <div class="flow-node service">WMDisconnectService</div>
+              <span class="flow-arrow">→</span>
+              <div class="flow-node external">iBPS WMDisconnect</div>
+            </div>
+          </div>
+          <div class="params-section">
+            <h4>Parameters</h4>
+            <div class="params-grid">
+              <div class="param">
+                <span class="param-name">name</span>
+                <span class="param-type">Query</span>
+                <span class="param-required">Required</span>
+              </div>
+              <div class="param">
+                <span class="param-name">sessionId</span>
+                <span class="param-type">Header</span>
+                <span class="param-required">Required</span>
+              </div>
+            </div>
+          </div>
+          <div class="io-section">
+            <div class="io-block">
+              <h5>📥 Request</h5>
+              <pre>
+POST /disconnect?name=supervisor
+Header: sessionId: 12345</pre
+              >
+            </div>
+            <div class="io-block">
+              <h5>📤 Response</h5>
+              <pre>Success</pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Session Management Section -->
+      <section id="session" class="controller-section">
+        <div class="controller-header">
+          <div class="icon color-session">⏱</div>
+          <div>
+            <h2>Session Management</h2>
+            <div class="path">SessionController.java → SessionManager.java</div>
+          </div>
+        </div>
+
+        <div class="endpoint">
+          <div class="endpoint-header">
+            <span class="method-badge method-post">POST</span>
+            <span class="endpoint-url">/session</span>
+          </div>
+          <p class="endpoint-description">
+            Returns a cached session if valid, or creates a new one. Sessions
+            are cached for 25 minutes.
+          </p>
+          <div class="flow-diagram">
+            <h4>Implementation Flow</h4>
+            <div class="flow-steps">
+              <div class="flow-node">Controller</div>
+              <span class="flow-arrow">→</span>
+              <div class="flow-node service">SessionManager</div>
+              <span class="flow-arrow">→</span>
+              <div class="flow-node">Check Cache</div>
+              <span class="flow-arrow">→</span>
+              <div class="flow-node external">WMConnect (if miss)</div>
+            </div>
+          </div>
+        </div>
+
+          <div class="io-section">
+            <div class="io-block">
+              <h5>📥 Request Body</h5>
+              <pre>
+{
+  "userName": "supervisor",
+  "password": "Password123"
+}</pre
+              >
+            </div>
+            <div class="io-block">
+              <h5>📤 Response</h5>
+              <pre>
+{
+  "success": true,
+  "sessionId": -1383533055,
+  "userName": "supervisor",
+  "remainingMinutes": 25,
+  "cached": true
+}</pre
+              >
+            </div>
+          </div>
+        </div>
+
+        <div class="endpoint">
+          <div class="endpoint-header">
+            <span class="method-badge method-delete">DELETE</span>
+            <span class="endpoint-url">/session</span>
+          </div>
+          <p class="endpoint-description">
+            Invalidates a cached session, forcing a new WMConnect call on next
+            request.
+          </p>
+          <div class="params-section">
+            <h4>Parameters</h4>
+            <div class="params-grid">
+              <div class="param">
+                <span class="param-name">userName</span>
+                <span class="param-type">Query</span>
+                <span class="param-required">Required</span>
+              </div>
+            </div>
+          </div>
+          <div class="io-section">
+            <div class="io-block">
+              <h5>📥 Request</h5>
+              <pre>DELETE /session?userName=supervisor</pre>
+            </div>
+            <div class="io-block">
+              <h5>📤 Response</h5>
+              <pre>
+{
+  "success": true,
+  "message": "Session invalidated for user: supervisor"
+}</pre
+              >
+            </div>
+          </div>
+        </div>
+
+        <div class="endpoint">
+          <div class="endpoint-header">
+            <span class="method-badge method-get">GET</span>
+            <span class="endpoint-url">/session/info</span>
+          </div>
+          <p class="endpoint-description">
+            Gets information about a cached session without creating a new one.
+          </p>
+          <div class="params-section">
+            <h4>Parameters</h4>
+            <div class="params-grid">
+              <div class="param">
+                <span class="param-name">userName</span>
+                <span class="param-type">Query</span>
+                <span class="param-required">Required</span>
+              </div>
+            </div>
+          </div>
+          <div class="io-section">
+            <div class="io-block">
+              <h5>📥 Request</h5>
+              <pre>GET /session/info?userName=supervisor</pre>
+            </div>
+            <div class="io-block">
+              <h5>📤 Response</h5>
+              <pre>
+{
+  "exists": true,
+  "sessionId": -1383533055,
+  "remainingMinutes": 24,
+  "isValid": true
+}</pre
+              >
+            </div>
+          </div>
+        </div>
+
+        <div class="endpoint">
+          <div class="endpoint-header">
+            <span class="method-badge method-get">GET</span>
+            <span class="endpoint-url">/session/stats</span>
+          </div>
+          <p class="endpoint-description">
+            Gets statistics about the session cache (size, timeout).
+          </p>
+          <div class="io-section">
+            <div class="io-block">
+              <h5>📥 Request</h5>
+              <pre>GET /session/stats</pre>
+            </div>
+            <div class="io-block">
+              <h5>📤 Response</h5>
+              <pre>
+{
+  "cacheSize": 5,
+  "timeoutMinutes": 25
+}</pre
+              >
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Queue Management Section -->
+      <section id="queue" class="controller-section">
+        <div class="controller-header">
+          <div class="icon color-queue">📥</div>
+          <div>
+            <h2>Queue Management</h2>
+            <div class="path">MyQueueController.java → MyQueueService.java</div>
+          </div>
+        </div>
+
+        <div class="endpoint">
+          <div class="endpoint-header">
+            <span class="method-badge method-get">GET</span>
+            <span class="endpoint-url">/queue/myqueue</span>
+          </div>
+          <p class="endpoint-description">
+            Returns all work items assigned directly to the user across all
+            processes.
+          </p>
+          <div class="flow-diagram">
+            <h4>Implementation Flow</h4>
+            <div class="flow-steps">
+              <div class="flow-node">Controller</div>
+              <span class="flow-arrow">→</span>
+              <div class="flow-node service">MyQueueService</div>
+              <span class="flow-arrow">→</span>
+              <div class="flow-node external">iBPS WMFetchWorkList</div>
+              <span class="flow-arrow">→</span>
+              <div class="flow-node">MyQueueFlag=Y</div>
+            </div>
+          </div>
+          <div class="io-section">
+            <div class="io-block">
+              <h5>📥 Request</h5>
+              <pre>GET /queue/myqueue</pre>
+            </div>
+            <div class="io-block">
+              <h5>📤 Response</h5>
+              <pre>
+{
+  "success": true,
+  "count": 5,
+  "workItems": [
+    {
+      "processInstanceId": "e-Notes-...",
+      "workitemId": "1",
+      "activityName": "Initiator",
+      "param1": "Subject..."
+    }
+  ]
+}</pre
+              >
+            </div>
+          </div>
+        </div>
+
+        <div class="endpoint">
+          <div class="endpoint-header">
+            <span class="method-badge method-get">GET</span>
+            <span class="endpoint-url">/queue/commonqueue</span>
+          </div>
+          <p class="endpoint-description">
+            Returns all work items from shared/group queues the user has access
+            to.
+          </p>
+          <div class="io-section">
+            <div class="io-block">
+              <h5>📥 Request</h5>
+              <pre>GET /queue/commonqueue</pre>
+            </div>
+            <div class="io-block">
+              <h5>📤 Response</h5>
+              <pre>
+{
+  "success": true,
+  "count": 2,
+  "workItems": [...]
+}</pre
+              >
+            </div>
+          </div>
+        </div>
+
+        <div class="endpoint">
+          <div class="endpoint-header">
+            <span class="method-badge method-get">GET</span>
+            <span class="endpoint-url">/queue/allworkitems</span>
+          </div>
+          <p class="endpoint-description">
+            Returns ALL work items (My Queue + Common Queue combined).
+          </p>
+          <div class="io-section">
+            <div class="io-block">
+              <h5>📥 Request</h5>
+              <pre>GET /queue/allworkitems</pre>
+            </div>
+            <div class="io-block">
+              <h5>📤 Response</h5>
+              <pre>
+{
+  "success": true,
+  "count": 7,
+  "workItems": [
+     // Combined list
+  ]
+}</pre
+              >
+            </div>
+          </div>
+        </div>
+
+        <div class="endpoint">
+          <div class="endpoint-header">
+            <span class="method-badge method-get">GET</span>
+            <span class="endpoint-url">/queue/list</span>
+          </div>
+          <p class="endpoint-description">
+            Returns a list of all queues the user has access to.
+          </p>
+          <div class="io-section">
+            <div class="io-block">
+              <h5>📥 Request</h5>
+              <pre>GET /queue/list</pre>
+            </div>
+            <div class="io-block">
+              <h5>📤 Response</h5>
+              <pre>
+{
+  "success": true,
+  "queues": [
+    {
+      "queueId": 101,
+      "queueName": "General_Queue"
+    }
+  ]
+}</pre
+              >
+            </div>
+          </div>
+        </div>
+
+        <div class="endpoint">
+          <div class="endpoint-header">
+            <span class="method-badge method-get">GET</span>
+            <span class="endpoint-url">/queue/{queueId}/items</span>
+          </div>
+          <p class="endpoint-description">
+            Returns work items from a specific queue by ID.
+          </p>
+          <div class="params-section">
+            <h4>Parameters</h4>
+            <div class="params-grid">
+              <div class="param">
+                <span class="param-name">queueId</span>
+                <span class="param-type">Path</span>
+                <span class="param-required">Required</span>
+              </div>
+            </div>
+          </div>
+          <div class="io-section">
+            <div class="io-block">
+              <h5>📥 Request</h5>
+              <pre>GET /queue/101/items</pre>
+            </div>
+            <div class="io-block">
+              <h5>📤 Response</h5>
+              <pre>
+{
+  "success": true,
+  "count": 3,
+  "workItems": [...]
+}</pre
+              >
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Notesheet Operations Section -->
+      <section id="notesheet" class="controller-section">
+        <div class="controller-header">
+          <div class="icon color-notesheet">📄</div>
+          <div>
+            <h2>Notesheet Operations</h2>
+            <div class="path">
+              NoteSheetController.java → NoteSheetService.java
+            </div>
+          </div>
+        </div>
+
+        <div class="endpoint">
+          <div class="endpoint-header">
+            <span class="method-badge method-get">GET</span>
+            <span class="endpoint-url">/notesheet/getoriginal</span>
+          </div>
+          <p class="endpoint-description">
+            Retrieves the original notesheet document (HTML) from OmniDocs by
+            parsing notesheet_original attribute.
+          </p>
+          <div class="flow-diagram">
+            <h4>Implementation Flow</h4>
+            <div class="flow-steps">
+              <div class="flow-node">Controller</div>
+              <span class="flow-arrow">→</span>
+              <div class="flow-node service">NoteSheetService</div>
+              <span class="flow-arrow">→</span>
+              <div class="flow-node external">WMFetchWorkItemAttributes</div>
+              <span class="flow-arrow">→</span>
+              <div class="flow-node external">OmniDocs getDocument</div>
+              <span class="flow-arrow">→</span>
+              <div class="flow-node">HTML File</div>
+            </div>
+          </div>
+          <div class="io-section">
+            <div class="io-block">
+              <h5>📥 Request</h5>
+              <pre>GET /notesheet/getoriginal?workitemId=1&processInstanceId=e-Notes...</pre>
+            </div>
+            <div class="io-block">
+              <h5>📤 Response</h5>
+              <pre>
+{
+  "success": true,
+  "found": true,
+  "filePath": "/tmp/notesheets/abc.pdf",
+  "documentName": "notesheet.pdf"
+}</pre
+              >
+            </div>
+          </div>
+        </div>
+
+        <div class="endpoint">
+          <div class="endpoint-header">
+            <span class="method-badge method-get">GET</span>
+            <span class="endpoint-url">/notesheet/getnotesheet</span>
+          </div>
+          <p class="endpoint-description">
+            Retrieves the notesheet document index by parsing 'notesheet'
+            attribute (FolderIndex#DocIndex).
+          </p>
+          <div class="io-section">
+            <div class="io-block">
+              <h5>📥 Request</h5>
+              <pre>GET /notesheet/getnotesheet?workitemId=1&processInstanceId=e-Notes...</pre>
+            </div>
+            <div class="io-block">
+              <h5>📤 Response</h5>
+              <pre>
+{
+  "success": true,
+  "found": true,
+  "documentIndex": "1664",
+  "folderIndex": "2325"
+}</pre
+              >
+            </div>
+          </div>
+        </div>
+
+        <div class="endpoint">
+          <div class="endpoint-header">
+            <span class="method-badge method-get">GET</span>
+            <span class="endpoint-url">/notesheet/getannotations</span>
+          </div>
+          <p class="endpoint-description">
+            Retrieves annotations for a document using NGOGetAnnotationGroupList
+            API.
+          </p>
+          <div class="flow-diagram">
+            <h4>Implementation Flow</h4>
+            <div class="flow-steps">
+              <div class="flow-node">Controller</div>
+              <span class="flow-arrow">→</span>
+              <div class="flow-node service">NoteSheetService</div>
+              <span class="flow-arrow">→</span>
+              <div class="flow-node external">OmniDocs executeAPIJSON</div>
+              <span class="flow-arrow">→</span>
+              <div class="flow-node">NGOGetAnnotationGroupList</div>
+            </div>
+          </div>
+          <div class="io-section">
+            <div class="io-block">
+              <h5>📥 Request</h5>
+              <pre>GET /notesheet/getannotations?documentIndex=1646</pre>
+            </div>
+            <div class="io-block">
+              <h5>📤 Response</h5>
+              <pre>
+{
+  "success": true,
+  "found": true,
+  "documentIndex": "1646",
+  "annotations": { "AnnotationGroup": { ... } }
+}</pre
+              >
+            </div>
+          </div>
+        </div>
+
+        <div class="endpoint">
+          <div class="endpoint-header">
+            <span class="method-badge method-post">POST</span>
+            <span class="endpoint-url">/notesheet/setannotations</span>
+          </div>
+          <p class="endpoint-description">
+            Sets annotations on a document using NGOAddAnnotation API.
+          </p>
+          <div class="io-section">
+            <div class="io-block">
+              <h5>📥 Request Body</h5>
+              <pre>
+{
+  "AnnotationGroup": {
+    "AnnotationBuffer": "TotalAnnotations=1...",
+    "PageNo": "1"
+  }
+}</pre
+              >
+            </div>
+            <div class="io-block">
+              <h5>📤 Response</h5>
+              <pre>
+{
+  "success": true,
+  "processedCount": 1,
+  "results": [{ "groupName": "user", "status": "Success" }]
+}</pre
+              >
+            </div>
+          </div>
+        </div>
+
+        <div class="endpoint">
+          <div class="endpoint-header">
+            <span class="method-badge method-get">GET</span>
+            <span class="endpoint-url">/notesheet/getcomments</span>
+          </div>
+          <p class="endpoint-description">
+            Retrieves comments history from Q_Eoffice_Commentshistory attribute.
+          </p>
+          <div class="io-section">
+            <div class="io-block">
+              <h5>📥 Request</h5>
+              <pre>GET /notesheet/getcomments?workitemId=1&processInstanceId=e-Notes...</pre>
+            </div>
+            <div class="io-block">
+              <h5>📤 Response</h5>
+              <pre>
+{
+  "success": true,
+  "count": 2,
+  "comments": [
+    {
+      "userName": "keerthi",
+      "comments": "updated",
+      "stage": "Initiator"
+    }
+  ]
+}</pre
+              >
+            </div>
+          </div>
+        </div>
+
+        <div class="endpoint">
+          <div class="endpoint-header">
+            <span class="method-badge method-get">GET</span>
+            <span class="endpoint-url">/notesheet/debug</span>
+          </div>
+          <p class="endpoint-description">
+            Dumps work item details to a temp file for debugging purposes.
+          </p>
+          <div class="io-section">
+            <div class="io-block">
+              <h5>📥 Request</h5>
+              <pre>GET /notesheet/debug?workitemId=1&processInstanceId=e-Notes...</pre>
+            </div>
+            <div class="io-block">
+              <h5>📤 Response</h5>
+              <pre>
+{
+  "success": true,
+  "dumpFile": "/tmp/workitem_dump_...json"
+}</pre
+              >
+            </div>
+          </div>
+        </div>
+
+        <div class="endpoint">
+          <div class="endpoint-header">
+            <span class="method-badge method-post">POST</span>
+            <span class="endpoint-url">/notesheet/createpdfnote</span>
+          </div>
+          <p class="endpoint-description">
+            Creates a PDF from original notesheet + supporting documents list + comments and updates the
+            notesheet document. The PDF includes a table of supporting documents (S.NO., Document Name, Document Index)
+            followed by the comments history table.
+          </p>
+          <div class="flow-diagram">
+            <h4>Sequence Diagram</h4>
+            <div class="mermaid">
+sequenceDiagram
+    participant C as Controller
+    participant SM as SessionManager
+    participant S as NoteSheetService
+    participant SD as SupportingDocsService
+    participant DO as DocumentOps
+    participant O as iBPS/OmniDocs
+
+    C->>SM: getServiceSession()
+    alt Cache Hit
+        SM-->>C: sessionId
+    else Cache Miss
+        SM->>O: WMConnect(user, pass)
+        O-->>SM: sessionId
+        SM-->>C: sessionId
+    end
+
+    C->>S: createPdfNote(wId, pId, sId)
+
+    S->>O: getOriginalNotesheet (HTML)
+    O-->>S: HTML File
+
+    S->>O: getComments (Attributes)
+    O-->>S: Comments JSON
+
+    S->>O: getNotesheet (DocIndex)
+    O-->>S: DocIndex (target)
+
+    S->>SD: getSupportingDocuments(wId, pId)
+    SD->>O: WMFetchWorkItemAttributes
+    O-->>SD: AttachmentFolderId
+    SD->>O: NGOGetDocumentListExt
+    O-->>SD: Documents List
+    SD-->>S: Documents JSON
+
+    S->>S: generatePdfWithComments(docs, comments)
+    Note right of S: Renders Documents Table + Comments Table
+
+    S->>DO: checkoutCheckinWithAnnotations()
+    DO->>O: getAnnotations (Backup)
+    O-->>DO: Annotations JSON
+
+    DO->>O: checkOut (Lock)
+    DO->>O: checkIn (New PDF Version)
+
+    DO->>O: setAnnotations (Restore)
+    DO-->>S: Success
+
+    S-->>C: Result JSON
+            </div>
+          </div>
+          <div class="params-section">
+            <h4>Parameters</h4>
+            <div class="params-grid">
+              <div class="param">
+                <span class="param-name">workitemId</span>
+                <span class="param-type">Query</span>
+                <span class="param-required">Required</span>
+              </div>
+              <div class="param">
+                <span class="param-name">processInstanceId</span>
+                <span class="param-type">Query</span>
+                <span class="param-required">Required</span>
+              </div>
+              <div class="param">
+                <span class="param-name">userName</span>
+                <span class="param-type">Query</span>
+                <span class="param-required">Optional*</span>
+              </div>
+              <div class="param">
+                <span class="param-name">password</span>
+                <span class="param-type">Query</span>
+                <span class="param-required">Optional*</span>
+              </div>
+              <div class="param">
+                <span class="param-name">sessionId</span>
+                <span class="param-type">Header</span>
+                <span class="param-required">Optional*</span>
+              </div>
+            </div>
+            <p style="font-size: 0.8rem; color: #64748b; margin-top: 8px">
+              * Provide either sessionId OR userName+password
+            </p>
+          </div>
+          <div class="io-section">
+            <div class="io-block">
+              <h5>📥 Request (Auto-Session)</h5>
+              <pre>
+POST /notesheet/createpdfnote
+  ?workitemId=1
+  &amp;processInstanceId=e-Notes-000000000008-process
+  &amp;userName=supervisor
+  &amp;password=Password123</pre
+              >
+            </div>
+            <div class="io-block">
+              <h5>📤 Response</h5>
+              <pre>
+{
+  "success": true,
+  "originalDocIndex": "1669",
+  "notedocumentIndex": "1668",
+  "newVersion": "1.5",
+  "pdfPath": "/tmp/notesheets/newNoteContent-uuid.pdf",
+  "commentsPath": "/tmp/comments/comments-uuid.json",
+  "annotationsPreserved": true
+}</pre
+              >
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Document Operations Section -->
+      <section id="docs" class="controller-section">
+        <div class="controller-header">
+          <div class="icon color-docs">📁</div>
+          <div>
+            <h2>Document Operations</h2>
+            <div class="path">
+              DocumentOpsController.java → DocumentOpsService.java
+            </div>
+          </div>
+        </div>
+
+        <div class="endpoint">
+          <div class="endpoint-header">
+            <span class="method-badge method-post">POST</span>
+            <span class="endpoint-url">/docs/checkoutcheckinwithanno</span>
+          </div>
+          <p class="endpoint-description">
+            Performs checkout/checkin cycle while preserving annotations.
+          </p>
+          <div class="flow-diagram">
+            <h4>Sequence Diagram</h4>
+            <div class="mermaid">
+sequenceDiagram
+    participant C as Controller
+    participant DO as DocumentOpsService
+    participant O as iBPS/OmniDocs
+
+    C->>DO: checkoutCheckinWithAnnotations(docId, path, sId)
+    
+    DO->>O: getAnnotations (NGOGetAnnotationGroupList)
+    O-->>DO: Annotations JSON (Backup)
+    
+    DO->>O: undoCheckout (NGOUndoCheckout)
+    Note right of DO: Only if already locked
+    
+    DO->>O: checkOut (NGOCheckout)
+    O-->>DO: Status Success
+    
+    DO->>O: checkIn (NGOCheckin) with New Content
+    O-->>DO: New Version (e.g., 2.0)
+    
+    DO->>O: setAnnotations (NGOAddAnnotation)
+    Note right of DO: Restores backed up annotations
+    
+    O-->>DO: Success
+    DO-->>C: Result JSON
+            </div>
+          </div>
+          <div class="params-section">
+            <h4>Parameters</h4>
+            <div class="params-grid">
+              <div class="param">
+                <span class="param-name">documentIndex</span>
+                <span class="param-type">Query</span>
+                <span class="param-required">Required</span>
+              </div>
+              <div class="param">
+                <span class="param-name">contentPath</span>
+                <span class="param-type">Query</span>
+                <span class="param-required">Required</span>
+              </div>
+              <div class="param">
+                <span class="param-name">sessionId</span>
+                <span class="param-type">Header</span>
+                <span class="param-required">Required</span>
+              </div>
+            </div>
+          </div>
+          <div class="io-section">
+            <div class="io-block">
+              <h5>📥 Request</h5>
+              <pre>
+POST /docs/checkoutcheckinwithanno
+  ?documentIndex=1668
+  &amp;contentPath=/tmp/notesheets/file.pdf
+
+Header: sessionId: -1383533055</pre
+              >
+            </div>
+            <div class="io-block">
+              <h5>📤 Response</h5>
+              <pre>
+{
+  "success": true,
+  "documentIndex": "1668",
+  "newVersion": "1.5",
+  "annotationsBackedUp": true,
+  "annotationsRestored": true,
+  "annotationBackupPath": "/tmp/annotations/uuid.json"
+}</pre
+              >
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Supporting Documents Section -->
+      <section id="supportingdocs" class="controller-section">
+        <div class="controller-header">
+          <div class="icon color-supporting">📎</div>
+          <div>
+            <h2>Supporting Documents</h2>
+            <div class="path">
+              SupportingDocsController.java → SupportingDocsService.java
+            </div>
+          </div>
+        </div>
+
+        <div class="endpoint">
+          <div class="endpoint-header">
+            <span class="method-badge method-get">GET</span>
+            <span class="endpoint-url">/supportingdocs/list</span>
+          </div>
+          <p class="endpoint-description">
+            Retrieves all supporting documents attached to a work item.
+            Fetches the attachment folder associated with the work item
+            and returns a list of all documents with their metadata.
+          </p>
+          <div class="flow-diagram">
+            <h4>Implementation Flow</h4>
+            <div class="flow-steps">
+              <div class="flow-node">Controller</div>
+              <span class="flow-arrow">→</span>
+              <div class="flow-node service">SupportingDocsService</div>
+              <span class="flow-arrow">→</span>
+              <div class="flow-node external">WMFetchWorkItemAttributes</div>
+              <span class="flow-arrow">→</span>
+              <div class="flow-node">Extract AttachmentFolderId</div>
+              <span class="flow-arrow">→</span>
+              <div class="flow-node external">OmniDocs NGOGetFolderContents</div>
+              <span class="flow-arrow">→</span>
+              <div class="flow-node">Document List</div>
+            </div>
+          </div>
+          <div class="params-section">
+            <h4>Parameters</h4>
+            <div class="params-grid">
+              <div class="param">
+                <span class="param-name">workitemId</span>
+                <span class="param-type">Query</span>
+                <span class="param-required">Required</span>
+              </div>
+              <div class="param">
+                <span class="param-name">processInstanceId</span>
+                <span class="param-type">Query</span>
+                <span class="param-required">Required</span>
+              </div>
+              <div class="param">
+                <span class="param-name">sessionId</span>
+                <span class="param-type">Header</span>
+                <span class="param-required">Required</span>
+              </div>
+            </div>
+          </div>
+          <div class="io-section">
+            <div class="io-block">
+              <h5>📥 Request</h5>
+              <pre>
+GET /supportingdocs/list
+  ?workitemId=1
+  &amp;processInstanceId=e-Notes-000000000008-process
+
+Header: sessionId: -1383533055</pre
+              >
+            </div>
+            <div class="io-block">
+              <h5>📤 Response</h5>
+              <pre>
+{
+  "success": true,
+  "folderId": "1234",
+  "processInstanceId": "e-Notes-000000000008-process",
+  "workitemId": "1",
+  "count": 2,
+  "documents": [
+    {
+      "documentIndex": "1670",
+      "documentName": "Invoice.pdf",
+      "documentType": "pdf",
+      "documentSize": "245678",
+      "createdDateTime": "2025-01-15 10:30:00",
+      "modifiedDateTime": "2025-01-15 10:30:00",
+      "versionNo": "1.0",
+      "owner": "keerthi",
+      "comment": "Supporting invoice"
+    },
+    {
+      "documentIndex": "1671",
+      "documentName": "Contract.docx",
+      "documentType": "docx",
+      "documentSize": "156789",
+      "createdDateTime": "2025-01-14 09:15:00",
+      "modifiedDateTime": "2025-01-14 09:15:00",
+      "versionNo": "1.0",
+      "owner": "admin",
+      "comment": ""
+    }
+  ]
+}</pre
+              >
+            </div>
+          </div>
+          <div class="flow-diagram" style="margin-top: 16px;">
+            <h4>Sequence Diagram</h4>
+            <div class="mermaid">
+sequenceDiagram
+    participant C as Controller
+    participant S as SupportingDocsService
+    participant I as iBPS
+    participant O as OmniDocs
+
+    C->>S: getSupportingDocuments(wId, pId, sId)
+
+    S->>I: WMFetchWorkItemAttributes
+    I-->>S: Work Item Attributes
+
+    S->>S: Extract AttachmentFolderId
+
+    S->>O: NGOGetFolderContents(folderId)
+    O-->>S: Document List
+
+    S->>S: Parse & Build Response
+    S-->>C: JSON with Documents Array
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Document Viewer Section -->
+      <section id="docviewer" class="controller-section">
+        <div class="controller-header">
+          <div class="icon" style="background: linear-gradient(135deg, #8b5cf6, #6366f1);">🔗</div>
+          <div>
+            <h2>Document Viewer (PDF Hyperlinks)</h2>
+            <div class="path">
+              DocumentViewerController.java
+            </div>
+          </div>
+        </div>
+
+        <div class="endpoint">
+          <div class="endpoint-header">
+            <span class="method-badge method-get">GET</span>
+            <span class="endpoint-url">/docs/viewer</span>
+          </div>
+          <p class="endpoint-description">
+            Serves a professional login page for document viewing. Used when users click hyperlinks
+            in downloaded PDF notesheets (Scenario 2). After authentication, redirects to document download.
+          </p>
+          <div class="flow-diagram">
+            <h4>User Flow</h4>
+            <div class="flow-steps">
+              <div class="flow-node">PDF Hyperlink Click</div>
+              <span class="flow-arrow">→</span>
+              <div class="flow-node">Login Page</div>
+              <span class="flow-arrow">→</span>
+              <div class="flow-node service">Authenticate</div>
+              <span class="flow-arrow">→</span>
+              <div class="flow-node external">Download Document</div>
+            </div>
+          </div>
+          <div class="params-section">
+            <h4>Parameters</h4>
+            <div class="params-grid">
+              <div class="param">
+                <span class="param-name">docIndex</span>
+                <span class="param-type">Query</span>
+                <span class="param-required">Required</span>
+              </div>
+            </div>
+          </div>
+          <div class="io-section">
+            <div class="io-block">
+              <h5>📥 Request</h5>
+              <pre>GET /docs/viewer?docIndex=1670</pre>
+            </div>
+            <div class="io-block">
+              <h5>📤 Response</h5>
+              <pre>HTML Login Page (Professional UI)</pre>
+            </div>
+          </div>
+        </div>
+
+        <div class="endpoint">
+          <div class="endpoint-header">
+            <span class="method-badge method-post">POST</span>
+            <span class="endpoint-url">/docs/viewer/authenticate</span>
+          </div>
+          <p class="endpoint-description">
+            Authenticates user credentials and returns a session for document download.
+            Called by the login page via AJAX.
+          </p>
+          <div class="params-section">
+            <h4>Parameters</h4>
+            <div class="params-grid">
+              <div class="param">
+                <span class="param-name">userName</span>
+                <span class="param-type">Body</span>
+                <span class="param-required">Required</span>
+              </div>
+              <div class="param">
+                <span class="param-name">password</span>
+                <span class="param-type">Body</span>
+                <span class="param-required">Required</span>
+              </div>
+              <div class="param">
+                <span class="param-name">docIndex</span>
+                <span class="param-type">Body</span>
+                <span class="param-required">Required</span>
+              </div>
+            </div>
+          </div>
+          <div class="io-section">
+            <div class="io-block">
+              <h5>📥 Request</h5>
+              <pre>
+POST /docs/viewer/authenticate
+Content-Type: application/json
+
+{
+  "userName": "supervisor",
+  "password": "Password123",
+  "docIndex": "1670"
+}</pre>
+            </div>
+            <div class="io-block">
+              <h5>📤 Response</h5>
+              <pre>
+{
+  "success": true,
+  "sessionId": -1383533055,
+  "downloadUrl": "/docs/download/1670"
+}</pre>
+            </div>
+          </div>
+        </div>
+
+        <div class="endpoint">
+          <div class="endpoint-header">
+            <span class="method-badge method-get">GET</span>
+            <span class="endpoint-url">/docs/download/{docIndex}</span>
+          </div>
+          <p class="endpoint-description">
+            Downloads the document content as a file attachment. Requires valid sessionId header.
+          </p>
+          <div class="flow-diagram">
+            <h4>Sequence Diagram</h4>
+            <div class="mermaid">
+sequenceDiagram
+    participant U as User
+    participant V as Viewer Page
+    participant C as Controller
+    participant S as SessionManager
+    participant O as OmniDocs
+
+    U->>V: Click PDF hyperlink
+    V->>U: Show Login Form
+    U->>V: Enter credentials
+    V->>C: POST /authenticate
+    C->>S: getSession(user, pass)
+    S-->>C: sessionId
+    C-->>V: {success, sessionId, downloadUrl}
+    V->>C: GET /download/{docIndex} + sessionId
+    C->>O: getDocumentStreamJSON
+    O-->>C: Binary content
+    C-->>U: File download
+            </div>
+          </div>
+          <div class="params-section">
+            <h4>Parameters</h4>
+            <div class="params-grid">
+              <div class="param">
+                <span class="param-name">docIndex</span>
+                <span class="param-type">Path</span>
+                <span class="param-required">Required</span>
+              </div>
+              <div class="param">
+                <span class="param-name">sessionId</span>
+                <span class="param-type">Header</span>
+                <span class="param-required">Required</span>
+              </div>
+            </div>
+          </div>
+          <div class="io-section">
+            <div class="io-block">
+              <h5>📥 Request</h5>
+              <pre>
+GET /docs/download/1670
+Header: sessionId: -1383533055</pre>
+            </div>
+            <div class="io-block">
+              <h5>📤 Response</h5>
+              <pre>
+Content-Type: application/octet-stream
+Content-Disposition: attachment; filename="Invoice.pdf"
+
+[Binary file content]</pre>
+            </div>
+          </div>
+        </div>
+
+        <div class="endpoint" style="background: #f0fdf4; border-left: 4px solid #16a34a;">
+          <h4 style="color: #16a34a; margin-bottom: 12px;">📋 Configuration</h4>
+          <p class="endpoint-description">
+            The document viewer URL is configured in <code>application.properties</code>:
+          </p>
+          <pre style="background: #1e293b; color: #e2e8f0; padding: 16px; border-radius: 8px; margin-top: 12px;">
+# Document Viewer Configuration
+docs.viewer.server.host=74.225.130.20
+docs.viewer.server.port=8089
+docs.viewer.context.path=/balmerrestservice
+docs.viewer.base.url=http://${docs.viewer.server.host}:${docs.viewer.server.port}${docs.viewer.context.path}/docs/viewer</pre>
+          <p style="margin-top: 12px; font-size: 0.9rem; color: #64748b;">
+            <strong>Note:</strong> PDF hyperlinks are generated using this base URL. Update these properties
+            to match your deployment environment.
+          </p>
+        </div>
+      </section>
+
+      <footer>
+        <p>
+          &copy; 2025 Balmer Lawrie & Co. Ltd.
+        </p>
+      </footer>
+    </div>
+  </body>
+</html>
