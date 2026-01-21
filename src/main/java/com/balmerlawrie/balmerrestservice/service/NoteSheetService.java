@@ -10,6 +10,8 @@ import org.springframework.stereotype.Service;
 
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -29,6 +31,15 @@ public class NoteSheetService extends BaseIbpsService {
 
     @Value("${omnidocs.api.url}")
     private String omniDocsApiUrl;
+
+    @Value("${ibps.server.host}")
+    private String ibpsServerHost;
+
+    @Value("${ibps.server.port}")
+    private String ibpsServerPort;
+
+    @Value("${ibps.cabinet.name}")
+    private String ibpsCabinetName;
 
     @Value("${ibps.getWorkItem.url}")
     private String getWorkItemUrlTemplate;
@@ -1645,7 +1656,7 @@ public class NoteSheetService extends BaseIbpsService {
             buffer.append("UserID=").append(userId).append("\n");
             buffer.append("Rights=VM\n");
             buffer.append("HyperlinkName=View\n");
-            buffer.append("HyperlinkURL=http://google.com\n");
+            buffer.append("HyperlinkURL=").append(buildOmniDocsRedirectUrl(pos.docIndex)).append("\n");
             buffer.append("Height=-15\n");
             buffer.append("Width=0\n");
             buffer.append("Escapement=0\n");
@@ -1674,6 +1685,25 @@ public class NoteSheetService extends BaseIbpsService {
         return String.format("%d,%02d,%02d,%02d,%02d,%02d",
                 now.getYear(), now.getMonthValue(), now.getDayOfMonth(),
                 now.getHour(), now.getMinute(), now.getSecond());
+    }
+
+    private String buildOmniDocsRedirectUrl(String documentIndex) {
+        String baseUrl = "http://" + ibpsServerHost + ":" + ibpsServerPort
+                + "/omnidocs/WebApiRequestRedirection";
+        return baseUrl
+                + "?Application=SupportDocsView"
+                + "&cabinetName=" + urlEncode(ibpsCabinetName)
+                + "&sessionIndexSet=false"
+                + "&DocumentId=" + urlEncode(documentIndex)
+                + "&enableDCInfo=true"
+                + "&S=S";
+    }
+
+    private String urlEncode(String value) {
+        if (value == null) {
+            return "";
+        }
+        return URLEncoder.encode(value, StandardCharsets.UTF_8);
     }
 
     /**
@@ -1745,8 +1775,8 @@ public class NoteSheetService extends BaseIbpsService {
                 }
                 String docIndex = doc.path("documentIndex").asText("");
 
-                // Document name is plain text - hyperlinks are added via View column annotations
-                String docNameHtml = escapeHtml(docName);
+                String docUrl = buildOmniDocsRedirectUrl(docIndex);
+                String docNameHtml = "<a href=\"" + escapeHtml(docUrl) + "\">" + escapeHtml(docName) + "</a>";
 
                 String row = rowTemplate
                         .replace("{{SNO}}", String.valueOf(sno++))
