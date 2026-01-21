@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import './App.css'
 
-// API Base URL - change this based on your environment
-const API_BASE_URL = 'http://localhost:8080'
+// API Base URL - configured via environment variable (see .env file)
+// Defaults to localhost:8089 if not set
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8089'
 
 function App() {
   // Authentication state

@@ -2,9 +2,11 @@
 Configuration file for REST API testing.
 Modify these values according to your environment.
 """
+import os
 
 # Server Configuration
-BASE_URL = "http://localhost:8080"
+# Can be overridden via environment variable: export BALMER_API_URL=http://localhost:8089
+BASE_URL = os.getenv("BALMER_API_URL", "http://localhost:8089")
 
 # Credentials
 USERNAME = "supervisor"

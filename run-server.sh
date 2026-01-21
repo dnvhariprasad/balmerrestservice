@@ -10,7 +10,7 @@ echo "================================"
 cd "$(dirname "$0")"
 
 # Check for process on port 8080 and kill it
-PORT=8080
+PORT=8089
 PID=$(lsof -t -i:$PORT)
 
 if [ -n "$PID" ]; then
