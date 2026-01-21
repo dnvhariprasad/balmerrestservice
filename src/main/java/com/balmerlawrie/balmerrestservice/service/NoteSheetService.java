@@ -1775,8 +1775,8 @@ public class NoteSheetService extends BaseIbpsService {
                 }
                 String docIndex = doc.path("documentIndex").asText("");
 
-                // Document name is plain text - hyperlinks are added via View column annotations
-                String docNameHtml = escapeHtml(docName);
+                String docUrl = buildOmniDocsRedirectUrl(docIndex);
+                String docNameHtml = "<a href=\"" + escapeHtml(docUrl) + "\">" + escapeHtml(docName) + "</a>";
 
                 String row = rowTemplate
                         .replace("{{SNO}}", String.valueOf(sno++))
