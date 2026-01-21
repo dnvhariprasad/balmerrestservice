@@ -13,6 +13,7 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -206,7 +207,8 @@ public class NoteSheetController {
         @PostMapping(value = "/createpdfnote", produces = MediaType.APPLICATION_JSON_VALUE)
         public ResponseEntity<JsonNode> createPdfNote(
                         @Parameter(description = "Work Item ID", required = true, example = "1") @RequestParam String workitemId,
-                        @Parameter(description = "Process Instance ID", required = true, example = "e-Notes-000000000008-process") @RequestParam String processInstanceId) {
+                        @Parameter(description = "Process Instance ID", required = true, example = "e-Notes-000000000008-process") @RequestParam String processInstanceId,
+                        @Parameter(description = "Optional Session ID from login. If not provided, uses service account.") @RequestHeader(value = "sessionId", required = false) Long providedSessionId) {
 
                 if (workitemId == null || workitemId.isEmpty() || processInstanceId == null
                                 || processInstanceId.isEmpty()) {
@@ -214,15 +216,65 @@ public class NoteSheetController {
                                         createError("Missing required parameters: workitemId, processInstanceId"));
                 }
 
-                // Get session using service account credentials from config
-                Long sessionId = sessionManager.getServiceSession();
-                if (sessionId == null) {
-                        return ResponseEntity.status(401)
-                                        .body(createError("Failed to establish service session"));
+                // Use provided session ID or fall back to service account
+                Long sessionId = providedSessionId;
+                if (sessionId == null || sessionId == 0) {
+                        sessionId = sessionManager.getServiceSession();
+                        if (sessionId == null) {
+                                return ResponseEntity.status(401)
+                                                .body(createError("Failed to establish service session"));
+                        }
                 }
 
                 JsonNode result = noteSheetService.createPdfNote(processInstanceId, workitemId, sessionId);
+
+                // Check for session expiry and retry once with a fresh session (only if using service account)
+                if (providedSessionId == null && !result.path("success").asBoolean(true)) {
+                        String error = result.path("error").asText("").toLowerCase();
+                        String details = result.path("details").asText("").toLowerCase();
+                        if (error.contains("invalid session") || error.contains("401") ||
+                            details.contains("invalid session") || details.contains("401")) {
+                                // Invalidate cached session and retry
+                                sessionManager.invalidateSessionById(sessionId);
+                                sessionId = sessionManager.getServiceSession();
+                                if (sessionId != null) {
+                                        result = noteSheetService.createPdfNote(processInstanceId, workitemId, sessionId);
+                                }
+                        }
+                }
+
                 return ResponseEntity.ok(result);
+        }
+
+        @Operation(summary = "Download Document with Annotations", description = "Downloads a document with all annotations burned into the PDF. "
+                        + "This renders OmniDocs annotations (hyperlinks, lines, stamps, etc.) directly onto the PDF for offline viewing.")
+        @ApiResponses(value = {
+                        @ApiResponse(responseCode = "200", description = "PDF with annotations", content = @Content(mediaType = "application/pdf")),
+                        @ApiResponse(responseCode = "400", description = "Invalid parameters"),
+                        @ApiResponse(responseCode = "404", description = "Document not found or failed to process")
+        })
+        @GetMapping(value = "/downloadwithannotations", produces = MediaType.APPLICATION_PDF_VALUE)
+        public ResponseEntity<byte[]> downloadWithAnnotations(
+                        @Parameter(description = "Document Index", required = true, example = "1664") @RequestParam String documentIndex,
+                        @Parameter(description = "Session ID from login", required = true) @RequestHeader("sessionId") long sessionId) {
+
+                if (documentIndex == null || documentIndex.isEmpty()) {
+                        return ResponseEntity.badRequest().build();
+                }
+
+                byte[] pdfWithAnnotations = noteSheetService.downloadDocumentWithAnnotations(documentIndex, sessionId);
+
+                if (pdfWithAnnotations == null || pdfWithAnnotations.length == 0) {
+                        return ResponseEntity.notFound().build();
+                }
+
+                HttpHeaders headers = new HttpHeaders();
+                headers.setContentType(MediaType.APPLICATION_PDF);
+                headers.setContentDispositionFormData("attachment", "document_" + documentIndex + "_annotated.pdf");
+
+                return ResponseEntity.ok()
+                                .headers(headers)
+                                .body(pdfWithAnnotations);
         }
 
         private JsonNode createError(String message) {

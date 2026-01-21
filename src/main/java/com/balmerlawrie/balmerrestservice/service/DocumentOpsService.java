@@ -55,14 +55,30 @@ public class DocumentOpsService {
 
     /**
      * Performs checkout, checkin with new content, and restores annotations.
-     * 
+     *
      * @param documentIndex Document to update
      * @param contentPath   Path to the new content file
      * @param sessionId     Session ID for authentication
      * @return JSON result with status
      */
     public JsonNode checkoutCheckinWithAnnotations(String documentIndex, String contentPath, long sessionId) {
-        log.info("Starting checkoutCheckinWithAnnotations for documentIndex: {}", documentIndex);
+        return checkoutCheckinWithAnnotations(documentIndex, contentPath, sessionId, false);
+    }
+
+    /**
+     * Performs checkout, checkin with new content, and restores annotations.
+     * Optionally filters out View hyperlink annotations before restoring.
+     *
+     * @param documentIndex         Document to update
+     * @param contentPath           Path to the new content file
+     * @param sessionId             Session ID for authentication
+     * @param filterViewHyperlinks  If true, removes existing View hyperlink annotations before restore
+     * @return JSON result with status
+     */
+    public JsonNode checkoutCheckinWithAnnotations(String documentIndex, String contentPath, long sessionId,
+            boolean filterViewHyperlinks) {
+        log.info("Starting checkoutCheckinWithAnnotations for documentIndex: {}, filterViewHyperlinks: {}",
+                documentIndex, filterViewHyperlinks);
 
         try {
             // Step 1: Get annotations and save temporarily
@@ -71,9 +87,17 @@ public class DocumentOpsService {
             JsonNode annotations = annotationsResult.path("annotations");
 
             String annotationBackupPath = null;
+            JsonNode filteredAnnotations = annotations;
+
             if (!annotations.isMissingNode() && annotations.size() > 0) {
                 annotationBackupPath = saveAnnotationsToTemp(documentIndex, annotations);
                 log.info("Annotations backed up to: {}", annotationBackupPath);
+
+                // Filter out View hyperlink annotations if requested
+                if (filterViewHyperlinks) {
+                    filteredAnnotations = filterViewHyperlinkAnnotations(annotations);
+                    log.info("Filtered View hyperlink annotations from backup");
+                }
             } else {
                 log.info("No annotations found to backup.");
             }
@@ -105,11 +129,11 @@ public class DocumentOpsService {
 
             String newVersion = checkinResult.path("newVersion").asText();
 
-            // Step 5: Restore annotations
+            // Step 5: Restore annotations (using filtered annotations if applicable)
             log.info("Step 5: Restoring annotations...");
             JsonNode restoreResult = null;
-            if (annotationBackupPath != null) {
-                restoreResult = noteSheetService.setAnnotations(documentIndex, annotations, sessionId);
+            if (annotationBackupPath != null && !filteredAnnotations.isMissingNode() && filteredAnnotations.size() > 0) {
+                restoreResult = noteSheetService.setAnnotations(documentIndex, filteredAnnotations, sessionId);
                 log.info("Annotations restored.");
             }
 
@@ -120,6 +144,7 @@ public class DocumentOpsService {
             result.put("newVersion", newVersion);
             result.put("annotationsBackedUp", annotationBackupPath != null);
             result.put("annotationsRestored", restoreResult != null);
+            result.put("viewHyperlinksFiltered", filterViewHyperlinks);
             if (annotationBackupPath != null) {
                 result.put("annotationBackupPath", annotationBackupPath);
             }
@@ -132,6 +157,192 @@ public class DocumentOpsService {
             errorResult.put("success", false);
             errorResult.put("error", e.getMessage());
             return errorResult;
+        }
+    }
+
+    /**
+     * Filters out View hyperlink annotations from the annotation groups.
+     * This removes annotation groups that contain only View hyperlinks,
+     * or removes View hyperlinks from groups that contain other annotations.
+     *
+     * @param annotations The original annotations JSON node
+     * @return Filtered annotations without View hyperlinks
+     */
+    private JsonNode filterViewHyperlinkAnnotations(JsonNode annotations) {
+        try {
+            // Check if there's an AnnotationGroup
+            JsonNode annotationGroup = annotations.path("AnnotationGroup");
+            if (annotationGroup.isMissingNode()) {
+                return annotations;
+            }
+
+            ObjectNode result = jsonMapper.createObjectNode();
+
+            if (annotationGroup.isArray()) {
+                // Multiple annotation groups
+                com.fasterxml.jackson.databind.node.ArrayNode filteredGroups = jsonMapper.createArrayNode();
+                for (JsonNode group : annotationGroup) {
+                    JsonNode filteredGroup = filterSingleAnnotationGroup(group);
+                    if (filteredGroup != null) {
+                        filteredGroups.add(filteredGroup);
+                    }
+                }
+                if (filteredGroups.size() > 0) {
+                    result.set("AnnotationGroup", filteredGroups);
+                }
+            } else {
+                // Single annotation group
+                JsonNode filteredGroup = filterSingleAnnotationGroup(annotationGroup);
+                if (filteredGroup != null) {
+                    result.set("AnnotationGroup", filteredGroup);
+                }
+            }
+
+            return result;
+        } catch (Exception e) {
+            log.error("Error filtering View hyperlink annotations: {}", e.getMessage(), e);
+            return annotations; // Return original if filtering fails
+        }
+    }
+
+    /**
+     * Filters a single annotation group to remove View hyperlink annotations.
+     *
+     * @param group The annotation group to filter
+     * @return The filtered group, or null if all annotations were View hyperlinks
+     */
+    private JsonNode filterSingleAnnotationGroup(JsonNode group) {
+        String buffer = group.path("AnnotationBuffer").asText("");
+        String groupName = group.path("AnnotGroupName").asText("");
+
+        // Check if this is a ViewLinks group (created by our code)
+        if ("ViewLinks".equals(groupName)) {
+            log.info("Filtering out entire ViewLinks annotation group");
+            return null;
+        }
+
+        // Check if buffer contains View hyperlinks
+        if (buffer.contains("HyperlinkName=View")) {
+            // Need to parse and filter the buffer
+            String filteredBuffer = removeViewHyperlinksFromBuffer(buffer);
+
+            if (filteredBuffer == null || filteredBuffer.isEmpty()) {
+                // All annotations were View hyperlinks
+                log.info("Filtered out annotation group {} - all were View hyperlinks", groupName);
+                return null;
+            }
+
+            // Create new group with filtered buffer
+            ObjectNode filteredGroup = jsonMapper.createObjectNode();
+            filteredGroup.put("AnnotGroupName", groupName);
+            filteredGroup.put("AnnotationType", group.path("AnnotationType").asText(""));
+            filteredGroup.put("PageNo", group.path("PageNo").asText("1"));
+            filteredGroup.put("AccessType", group.path("AccessType").asText("I"));
+            filteredGroup.put("AnnotationBuffer", filteredBuffer);
+
+            // Copy other fields if present
+            if (group.has("Owner")) filteredGroup.put("Owner", group.path("Owner").asText());
+            if (group.has("AnnotGroupIndex")) filteredGroup.put("AnnotGroupIndex", group.path("AnnotGroupIndex").asText());
+
+            log.info("Filtered View hyperlinks from annotation group {}", groupName);
+            return filteredGroup;
+        }
+
+        // No View hyperlinks in this group, return as-is
+        return group;
+    }
+
+    /**
+     * Removes View hyperlink sections from an annotation buffer.
+     * Parses the INI-style format and removes sections where HyperlinkName=View.
+     *
+     * @param buffer The original annotation buffer
+     * @return The filtered buffer, or null if no annotations remain
+     */
+    private String removeViewHyperlinksFromBuffer(String buffer) {
+        try {
+            String[] lines = buffer.split("\n");
+            StringBuilder result = new StringBuilder();
+            boolean inHyperlinkSection = false;
+            boolean isViewHyperlink = false;
+            StringBuilder currentSection = new StringBuilder();
+            int totalAnnotations = 0;
+            int noOfHyperlinks = 0;
+            int filteredHyperlinks = 0;
+
+            for (String line : lines) {
+                line = line.trim();
+
+                // Check for section headers
+                if (line.matches("\\[.*Hyperlink\\d+\\]")) {
+                    // Save previous section if it wasn't a View hyperlink
+                    if (inHyperlinkSection && !isViewHyperlink && currentSection.length() > 0) {
+                        result.append(currentSection);
+                        filteredHyperlinks++;
+                    }
+
+                    inHyperlinkSection = true;
+                    isViewHyperlink = false;
+                    currentSection = new StringBuilder();
+                    currentSection.append(line).append("\n");
+                } else if (line.startsWith("[") && line.endsWith("]")) {
+                    // Other section header - save previous hyperlink section if valid
+                    if (inHyperlinkSection && !isViewHyperlink && currentSection.length() > 0) {
+                        result.append(currentSection);
+                        filteredHyperlinks++;
+                    }
+
+                    inHyperlinkSection = false;
+                    isViewHyperlink = false;
+
+                    // Handle header sections
+                    if (line.contains("AnnotationHeader")) {
+                        currentSection = new StringBuilder();
+                        currentSection.append(line).append("\n");
+                    } else {
+                        result.append(line).append("\n");
+                    }
+                } else if (inHyperlinkSection) {
+                    currentSection.append(line).append("\n");
+                    if (line.equals("HyperlinkName=View")) {
+                        isViewHyperlink = true;
+                    }
+                } else if (line.startsWith("TotalAnnotations=")) {
+                    totalAnnotations = Integer.parseInt(line.split("=")[1]);
+                    // Will be updated after filtering
+                } else if (line.startsWith("NoOfHyperlinks=")) {
+                    noOfHyperlinks = Integer.parseInt(line.split("=")[1]);
+                    // Will be updated after filtering
+                } else {
+                    result.append(line).append("\n");
+                }
+            }
+
+            // Handle last section
+            if (inHyperlinkSection && !isViewHyperlink && currentSection.length() > 0) {
+                result.append(currentSection);
+                filteredHyperlinks++;
+            }
+
+            // Update counts in the header
+            String filteredBuffer = result.toString();
+            if (filteredHyperlinks == 0) {
+                return null; // No annotations left
+            }
+
+            // Update TotalAnnotations and NoOfHyperlinks in the buffer
+            filteredBuffer = filteredBuffer.replaceFirst(
+                    "TotalAnnotations=\\d+",
+                    "TotalAnnotations=" + filteredHyperlinks);
+            filteredBuffer = filteredBuffer.replaceFirst(
+                    "NoOfHyperlinks=\\d+",
+                    "NoOfHyperlinks=" + filteredHyperlinks);
+
+            return filteredBuffer;
+
+        } catch (Exception e) {
+            log.error("Error parsing annotation buffer: {}", e.getMessage(), e);
+            return buffer; // Return original if parsing fails
         }
     }
 

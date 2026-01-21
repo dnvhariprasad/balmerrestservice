@@ -821,7 +821,7 @@ public class NoteSheetService extends BaseIbpsService {
             ObjectNode ngoGetDocumentBDO = jsonMapper.createObjectNode();
             ngoGetDocumentBDO.put("cabinetName", cabinetName);
             ngoGetDocumentBDO.put("docIndex", documentIndex);
-            ngoGetDocumentBDO.put("versionNo", "1.0");
+            ngoGetDocumentBDO.put("versionNo", "");  // Empty string = get latest version
             // Use sessionId as userDBId for authentication
             ngoGetDocumentBDO.put("userDBId", String.valueOf(sessionId));
             ngoGetDocumentBDO.put("userName", "");
@@ -885,6 +885,255 @@ public class NoteSheetService extends BaseIbpsService {
         }
 
         return filePath.toAbsolutePath().toString();
+    }
+
+    /**
+     * Downloads a document with annotations burned into the PDF.
+     * Uses PDFBox to render annotations onto the document.
+     *
+     * @param documentIndex Document Index
+     * @param sessionId     Session ID for authentication
+     * @return byte array of the PDF with annotations, or null on error
+     */
+    public byte[] downloadDocumentWithAnnotations(String documentIndex, long sessionId) {
+        log.info("Downloading document with annotations: documentIndex={}", documentIndex);
+
+        try {
+            // Step 1: Download the original document
+            byte[] documentContent = downloadDocument(documentIndex, sessionId);
+            if (documentContent == null || documentContent.length == 0) {
+                log.error("Failed to download document content");
+                return null;
+            }
+            log.info("Downloaded document: {} bytes", documentContent.length);
+
+            // Step 2: Get annotations
+            JsonNode annotationsResult = getAnnotations(documentIndex, sessionId);
+            if (!annotationsResult.path("success").asBoolean(false)) {
+                log.warn("Failed to get annotations, returning original document");
+                return documentContent;
+            }
+
+            JsonNode annotations = annotationsResult.path("annotations");
+            if (annotations.isMissingNode() || annotations.isEmpty()) {
+                log.info("No annotations found, returning original document");
+                return documentContent;
+            }
+
+            // Step 3: Load PDF with PDFBox
+            try (org.apache.pdfbox.pdmodel.PDDocument pdfDoc =
+                    org.apache.pdfbox.pdmodel.PDDocument.load(documentContent)) {
+
+                // Step 4: Process each annotation group
+                JsonNode groupsNode = annotations.path("AnnotationGroup");
+                if (groupsNode.isMissingNode()) {
+                    groupsNode = annotations;
+                }
+
+                java.util.List<JsonNode> groupList = new java.util.ArrayList<>();
+                if (groupsNode.isArray()) {
+                    for (JsonNode g : groupsNode) {
+                        groupList.add(g);
+                    }
+                } else if (!groupsNode.isEmpty()) {
+                    groupList.add(groupsNode);
+                }
+
+                log.info("Processing {} annotation groups", groupList.size());
+
+                for (JsonNode group : groupList) {
+                    int pageNo = group.path("PageNo").asInt(1) - 1; // Convert to 0-based
+                    String buffer = group.path("AnnotationBuffer").asText("");
+
+                    if (buffer.isEmpty() || pageNo < 0 || pageNo >= pdfDoc.getNumberOfPages()) {
+                        continue;
+                    }
+
+                    org.apache.pdfbox.pdmodel.PDPage page = pdfDoc.getPage(pageNo);
+                    float pageHeight = page.getMediaBox().getHeight();
+
+                    // Parse and render annotations from buffer
+                    renderAnnotationsFromBuffer(pdfDoc, page, buffer, pageHeight);
+                }
+
+                // Step 5: Write to byte array
+                java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+                pdfDoc.save(baos);
+                log.info("Generated PDF with annotations: {} bytes", baos.size());
+                return baos.toByteArray();
+            }
+
+        } catch (Exception e) {
+            log.error("Error downloading document with annotations: {}", e.getMessage(), e);
+            return null;
+        }
+    }
+
+    /**
+     * Parses annotation buffer and renders annotations onto a PDF page.
+     * Annotation buffer format is INI-style with sections like [GroupNameAnnotation1]
+     */
+    private void renderAnnotationsFromBuffer(org.apache.pdfbox.pdmodel.PDDocument doc,
+            org.apache.pdfbox.pdmodel.PDPage page, String buffer, float pageHeight) {
+
+        try (org.apache.pdfbox.pdmodel.PDPageContentStream cs =
+                new org.apache.pdfbox.pdmodel.PDPageContentStream(doc, page,
+                    org.apache.pdfbox.pdmodel.PDPageContentStream.AppendMode.APPEND, true, true)) {
+
+            // Parse the buffer into sections
+            String[] lines = buffer.split("\n");
+            java.util.Map<String, String> currentSection = null;
+            String currentSectionName = "";
+
+            for (String line : lines) {
+                line = line.trim();
+                if (line.isEmpty()) continue;
+
+                if (line.startsWith("[") && line.endsWith("]")) {
+                    // Process previous section if exists
+                    if (currentSection != null && !currentSection.isEmpty()) {
+                        renderAnnotation(cs, currentSectionName, currentSection, pageHeight);
+                    }
+                    // Start new section
+                    currentSectionName = line.substring(1, line.length() - 1);
+                    currentSection = new java.util.HashMap<>();
+                } else if (line.contains("=") && currentSection != null) {
+                    int idx = line.indexOf("=");
+                    String key = line.substring(0, idx).trim();
+                    String value = line.substring(idx + 1).trim();
+                    currentSection.put(key, value);
+                }
+            }
+
+            // Process last section
+            if (currentSection != null && !currentSection.isEmpty()) {
+                renderAnnotation(cs, currentSectionName, currentSection, pageHeight);
+            }
+
+        } catch (Exception e) {
+            log.error("Error rendering annotations: {}", e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Renders a single annotation based on its type.
+     */
+    private void renderAnnotation(org.apache.pdfbox.pdmodel.PDPageContentStream cs,
+            String sectionName, java.util.Map<String, String> props, float pageHeight) {
+
+        try {
+            // Determine annotation type from section name
+            String type = "";
+            if (sectionName.contains("Line") || sectionName.contains("LNE")) {
+                type = "LINE";
+            } else if (sectionName.contains("Box") || sectionName.contains("BOX")) {
+                type = "BOX";
+            } else if (sectionName.contains("Hyperlink")) {
+                type = "HYPERLINK";
+            } else if (sectionName.contains("TextStamp") || sectionName.contains("TXTSTAMP")) {
+                type = "TEXTSTAMP";
+            } else if (sectionName.contains("Highlight") || sectionName.contains("HLT")) {
+                type = "HIGHLIGHT";
+            } else if (sectionName.contains("FreeHand") || sectionName.contains("FRH")) {
+                type = "FREEHAND";
+            }
+
+            // Get coordinates (OmniDocs: Y from top, PDFBox: Y from bottom)
+            float x1 = parseFloat(props.get("X1"), 0);
+            float y1 = parseFloat(props.get("Y1"), 0);
+            float x2 = parseFloat(props.get("X2"), 0);
+            float y2 = parseFloat(props.get("Y2"), 0);
+
+            // Convert OmniDocs coordinates to PDFBox coordinates
+            // OmniDocs uses a scale factor relative to PDF coordinates
+            float scale = pageHeight / 1040f; // Approximate OmniDocs page height
+            float pdfX1 = x1 * scale;
+            float pdfY1 = pageHeight - (y1 * scale);
+            float pdfX2 = x2 * scale;
+            float pdfY2 = pageHeight - (y2 * scale);
+
+            // Parse color (OmniDocs stores as integer)
+            int colorInt = parseInt(props.get("Color"), 0);
+            float r = ((colorInt >> 16) & 0xFF) / 255f;
+            float g = ((colorInt >> 8) & 0xFF) / 255f;
+            float b = (colorInt & 0xFF) / 255f;
+
+            switch (type) {
+                case "LINE":
+                    cs.setStrokingColor(r, g, b);
+                    cs.setLineWidth(1f);
+                    cs.moveTo(pdfX1, pdfY1);
+                    cs.lineTo(pdfX2, pdfY2);
+                    cs.stroke();
+                    break;
+
+                case "BOX":
+                    cs.setStrokingColor(r, g, b);
+                    cs.setLineWidth(1f);
+                    float width = Math.abs(pdfX2 - pdfX1);
+                    float height = Math.abs(pdfY2 - pdfY1);
+                    cs.addRect(Math.min(pdfX1, pdfX2), Math.min(pdfY1, pdfY2), width, height);
+                    cs.stroke();
+                    break;
+
+                case "HIGHLIGHT":
+                    cs.setNonStrokingColor(r, g, b);
+                    cs.addRect(Math.min(pdfX1, pdfX2), Math.min(pdfY1, pdfY2),
+                            Math.abs(pdfX2 - pdfX1), Math.abs(pdfY2 - pdfY1));
+                    // Use transparency effect by drawing a semi-transparent rectangle
+                    // Note: PDFBox basic content stream doesn't support transparency directly
+                    // For now, just fill with color
+                    cs.fill();
+                    break;
+
+                case "HYPERLINK":
+                    // Draw hyperlink text
+                    String linkName = props.getOrDefault("HyperlinkName", "View");
+                    cs.beginText();
+                    cs.setFont(org.apache.pdfbox.pdmodel.font.PDType1Font.HELVETICA, 10);
+                    cs.setNonStrokingColor(0, 0, 1); // Blue for hyperlinks
+                    cs.newLineAtOffset(pdfX1, pdfY1);
+                    cs.showText(linkName);
+                    cs.endText();
+                    break;
+
+                case "TEXTSTAMP":
+                    String text = props.getOrDefault("StampText", "");
+                    if (!text.isEmpty()) {
+                        cs.beginText();
+                        cs.setFont(org.apache.pdfbox.pdmodel.font.PDType1Font.HELVETICA, 10);
+                        cs.setNonStrokingColor(r, g, b);
+                        cs.newLineAtOffset(pdfX1, pdfY1);
+                        cs.showText(text);
+                        cs.endText();
+                    }
+                    break;
+
+                default:
+                    // Unknown type, skip
+                    break;
+            }
+        } catch (Exception e) {
+            log.warn("Error rendering annotation {}: {}", sectionName, e.getMessage());
+        }
+    }
+
+    private float parseFloat(String s, float defaultValue) {
+        if (s == null || s.isEmpty()) return defaultValue;
+        try {
+            return Float.parseFloat(s);
+        } catch (NumberFormatException e) {
+            return defaultValue;
+        }
+    }
+
+    private int parseInt(String s, int defaultValue) {
+        if (s == null || s.isEmpty()) return defaultValue;
+        try {
+            return Integer.parseInt(s);
+        } catch (NumberFormatException e) {
+            return defaultValue;
+        }
     }
 
     /**
@@ -955,20 +1204,43 @@ public class NoteSheetService extends BaseIbpsService {
             int docCount = supportingDocsResult.path("count").asInt(0);
             log.info("Found {} supporting documents", docCount);
 
-            // Step 5: Generate PDF with documents and comments
-            log.info("Step 5: Generating PDF with documents and comments...");
+            // Step 5: Generate PDF with documents, comments, and track View positions
+            log.info("Step 5: Generating PDF with documents, comments, and position tracking...");
             JsonNode commentsArray = commentsResult.path("comments");
-            String pdfPath = generatePdfWithComments(htmlFilePath, documentsArray, commentsArray, uniqueId);
-            log.info("PDF generated at: {}", pdfPath);
+            PdfGenerationResult pdfResult = generatePdfWithPositions(htmlFilePath, documentsArray, commentsArray, uniqueId);
+            String pdfPath = pdfResult.pdfPath;
+            List<ViewLinkPosition> viewPositions = pdfResult.viewPositions;
+            log.info("PDF generated at: {} with {} view positions", pdfPath, viewPositions.size());
 
-            // Step 6: Call checkoutCheckinWithAnnotations
+            // Step 6: Call checkoutCheckinWithAnnotations (with filtering of existing View hyperlinks)
             log.info("Step 6: Updating notesheet with new PDF...");
             JsonNode updateResult = documentOpsService.checkoutCheckinWithAnnotations(
-                    notedocumentIndex, pdfPath, sessionId);
+                    notedocumentIndex, pdfPath, sessionId, true);
 
             if (!updateResult.path("success").asBoolean(false)) {
                 return createErrorResponse("Failed to update notesheet",
                         updateResult.path("error").asText("Update failed"));
+            }
+
+            // Step 7: Add View hyperlink annotations
+            log.info("Step 7: Adding View hyperlink annotations...");
+            int annotationsAdded = 0;
+            if (!viewPositions.isEmpty()) {
+                String annotBuffer = buildHyperlinkAnnotationBuffer(viewPositions, "ViewLinks", "system");
+                ObjectNode annotGroup = jsonMapper.createObjectNode();
+                annotGroup.put("AnnotationType", "A");  // "A" = Annotation type used by working hyperlinks
+                annotGroup.put("PageNo", "1");  // Will be handled per-page in buffer
+                annotGroup.put("AnnotGroupName", "ViewLinks");
+                annotGroup.put("AccessType", "S");  // Shared
+                annotGroup.put("AnnotationBuffer", annotBuffer);
+
+                JsonNode annotResult = setAnnotations(notedocumentIndex, annotGroup, sessionId);
+                if (annotResult.path("success").asBoolean(false)) {
+                    annotationsAdded = viewPositions.size();
+                    log.info("Successfully added {} View hyperlink annotations", annotationsAdded);
+                } else {
+                    log.warn("Failed to add View hyperlink annotations: {}", annotResult.path("error").asText());
+                }
             }
 
             // Build success response
@@ -980,6 +1252,7 @@ public class NoteSheetService extends BaseIbpsService {
             result.put("pdfPath", pdfPath);
             result.put("commentsPath", commentsPath);
             result.put("annotationsPreserved", updateResult.path("annotationsRestored").asBoolean(false));
+            result.put("viewHyperlinksAdded", annotationsAdded);
 
             log.info("PDF note created successfully. New version: {}", updateResult.path("newVersion").asText());
             return result;
@@ -1011,8 +1284,9 @@ public class NoteSheetService extends BaseIbpsService {
 
     /**
      * Generates PDF from original HTML content with supporting documents and appended comments.
+     * Also tracks the positions of View elements for hyperlink annotation creation.
      */
-    private String generatePdfWithComments(String htmlFilePath, JsonNode documents, JsonNode comments, String uniqueId) throws Exception {
+    private PdfGenerationResult generatePdfWithPositions(String htmlFilePath, JsonNode documents, JsonNode comments, String uniqueId) throws Exception {
         // Read original HTML content
         String htmlContent = new String(Files.readAllBytes(Paths.get(htmlFilePath)));
 
@@ -1021,8 +1295,8 @@ public class NoteSheetService extends BaseIbpsService {
         String documentRowTemplate = loadTemplate("templates/document_row_template.html");
 
         // Render document rows (above comments)
-        String documentRows = renderDocumentRows(documents, documentRowTemplate, docsViewerBaseUrl);
-        String documentsSection = documentListTemplate.replace("{{DOCUMENT_ROWS}}", documentRows);
+        RenderDocumentResult docResult = renderDocumentRows(documents, documentRowTemplate, docsViewerBaseUrl);
+        String documentsSection = documentListTemplate.replace("{{DOCUMENT_ROWS}}", docResult.html);
 
         // Load comment templates
         String commentTemplate = loadTemplate("templates/comment_template.html");
@@ -1076,14 +1350,330 @@ public class NoteSheetService extends BaseIbpsService {
         String pdfFileName = "newNoteContent-" + uniqueId + ".pdf";
         Path pdfPath = tempDir.resolve(pdfFileName);
 
+        List<ViewLinkPosition> viewPositions = new ArrayList<>();
+
+        // Create the PDF first
         try (java.io.OutputStream os = new FileOutputStream(pdfPath.toFile())) {
             org.xhtmlrenderer.pdf.ITextRenderer renderer = new org.xhtmlrenderer.pdf.ITextRenderer();
             renderer.setDocumentFromString(fullHtml);
             renderer.layout();
+
+            // Log renderer info for debugging
+            float dotsPerPoint = renderer.getDotsPerPoint();
+            log.info("Flying Saucer dotsPerPoint: {}", dotsPerPoint);
+
             renderer.createPDF(os);
         }
 
-        return pdfPath.toAbsolutePath().toString();
+        // Now extract View positions using PDFBox from the actual rendered PDF
+        // This gives us accurate coordinates that match the actual PDF content
+        viewPositions = extractViewPositionsFromPdf(pdfPath.toAbsolutePath().toString(), docResult.docIndices);
+
+        log.info("Extracted {} view link positions from PDF for annotation creation", viewPositions.size());
+        return new PdfGenerationResult(pdfPath.toAbsolutePath().toString(), viewPositions);
+    }
+
+    /**
+     * Extracts View element positions from Flying Saucer renderer using element IDs.
+     * Uses the layout tree to find elements with id="view-0", "view-1", etc.
+     *
+     * Coordinate system:
+     * - Flying Saucer: origin at top-left, Y increases downward, units in "dots"
+     * - OmniDocs: origin at top-left, Y increases downward, units in points
+     * - Conversion: points = dots / dotsPerPoint
+     */
+    private List<ViewLinkPosition> extractViewPositionsFromRenderer(org.xhtmlrenderer.pdf.ITextRenderer renderer, List<String> docIndices) {
+        List<ViewLinkPosition> positions = new ArrayList<>();
+
+        try {
+            org.xhtmlrenderer.render.BlockBox rootBox = renderer.getRootBox();
+            float dotsPerPoint = renderer.getDotsPerPoint();
+
+            // Get page height for page number calculation
+            // A4 page is 842 points, but let's get it from the renderer if possible
+            int pageHeightPts = 842;
+
+            log.info("=== Flying Saucer Coordinate Extraction ===");
+            log.info("dotsPerPoint: {}", dotsPerPoint);
+            log.info("Document has {} view elements to find", docIndices.size());
+
+            for (int i = 0; i < docIndices.size(); i++) {
+                String elementId = "view-" + i;
+                org.xhtmlrenderer.render.Box box = findBoxById(rootBox, elementId);
+
+                if (box != null) {
+                    // Get raw coordinates from Flying Saucer (in dots)
+                    int rawAbsX = box.getAbsX();
+                    int rawAbsY = box.getAbsY();
+                    int rawWidth = box.getWidth();
+                    int rawHeight = box.getHeight();
+
+                    log.info("Element '{}' RAW coords: absX={}, absY={}, width={}, height={}",
+                            elementId, rawAbsX, rawAbsY, rawWidth, rawHeight);
+
+                    // If width is 0 (inline span), try parent (TD cell)
+                    if (rawWidth <= 0) {
+                        org.xhtmlrenderer.render.Box parent = box.getParent();
+                        if (parent != null) {
+                            log.info("  Parent box: absX={}, absY={}, width={}, height={}",
+                                    parent.getAbsX(), parent.getAbsY(), parent.getWidth(), parent.getHeight());
+                            if (parent.getWidth() > 0) {
+                                rawWidth = parent.getWidth();
+                                rawAbsX = parent.getAbsX();
+                            }
+                        }
+                    }
+
+                    // Ensure minimum dimensions
+                    if (rawWidth <= 0) rawWidth = (int) (40 * dotsPerPoint); // ~40pt for "View" text
+                    if (rawHeight <= 0) rawHeight = (int) (20 * dotsPerPoint); // ~20pt height
+
+                    // Convert from dots to points
+                    int x1 = (int) (rawAbsX / dotsPerPoint);
+                    int y1 = (int) (rawAbsY / dotsPerPoint);
+                    int x2 = (int) ((rawAbsX + rawWidth) / dotsPerPoint);
+                    int y2 = (int) ((rawAbsY + rawHeight) / dotsPerPoint);
+
+                    log.info("  Converted to POINTS: x1={}, y1={}, x2={}, y2={}", x1, y1, x2, y2);
+
+                    // Calculate page number (Y in points / page height)
+                    int pageNo = (y1 / pageHeightPts) + 1;
+
+                    // Adjust Y to be relative to current page
+                    int pageOffsetY = (pageNo - 1) * pageHeightPts;
+                    int adjY1 = y1 - pageOffsetY;
+                    int adjY2 = y2 - pageOffsetY;
+
+                    log.info("  Page {}: adjusted Y1={}, Y2={}", pageNo, adjY1, adjY2);
+
+                    positions.add(new ViewLinkPosition(i, docIndices.get(i), pageNo, x1, adjY1, x2, adjY2));
+                } else {
+                    log.warn("Could not find element with id: {}", elementId);
+                }
+            }
+
+            log.info("=== End Coordinate Extraction ({} positions found) ===", positions.size());
+
+        } catch (Exception e) {
+            log.error("Error extracting view positions: {}", e.getMessage(), e);
+        }
+
+        return positions;
+    }
+
+    /**
+     * Extracts the positions of view-N span elements from the Flying Saucer layout tree.
+     * These positions are used to create hyperlink annotations in OmniDocs.
+     *
+     * @param renderer The ITextRenderer after layout() has been called
+     * @param docIndices List of document indices corresponding to each row
+     * @return List of ViewLinkPosition objects with coordinates for each view element
+     */
+    private List<ViewLinkPosition> extractViewPositions(org.xhtmlrenderer.pdf.ITextRenderer renderer, List<String> docIndices) {
+        List<ViewLinkPosition> positions = new ArrayList<>();
+
+        try {
+            org.xhtmlrenderer.render.BlockBox rootBox = renderer.getRootBox();
+
+            // Get page dimensions - A4 is 595 x 842 points
+            float dotsPerPoint = renderer.getDotsPerPoint();
+
+            // Find all elements with id starting with "view-"
+            for (int i = 0; i < docIndices.size(); i++) {
+                String elementId = "view-" + i;
+                org.xhtmlrenderer.render.Box box = findBoxById(rootBox, elementId);
+
+                if (box != null) {
+                    // Get absolute position in document coordinates
+                    int absX = box.getAbsX();
+                    int absY = box.getAbsY();
+                    int width = box.getWidth();
+                    int height = box.getHeight();
+
+                    // If width is 0 (inline element), try to get parent's width or use minimum
+                    // "View" text is approximately 30 points wide, 15 points tall
+                    if (width <= 0) {
+                        // Try to get parent box (the TD cell)
+                        org.xhtmlrenderer.render.Box parent = box.getParent();
+                        if (parent != null && parent.getWidth() > 0) {
+                            width = parent.getWidth();
+                            absX = parent.getAbsX();
+                        } else {
+                            // Fallback: use minimum width for "View" text (30 points * dotsPerPoint)
+                            width = (int) (30 * dotsPerPoint);
+                        }
+                    }
+                    if (height <= 0) {
+                        // Minimum height for text (15 points * dotsPerPoint)
+                        height = (int) (15 * dotsPerPoint);
+                    }
+
+                    // Convert to PDF points (divide by dotsPerPoint)
+                    int x1 = (int) (absX / dotsPerPoint);
+                    int y1 = (int) (absY / dotsPerPoint);
+                    int x2 = (int) ((absX + width) / dotsPerPoint);
+                    int y2 = (int) ((absY + height) / dotsPerPoint);
+
+                    // Determine which page this element is on
+                    // Each page is typically 842 points (A4 height)
+                    int pageHeight = 842; // A4 page height in points
+                    int pageNo = (y1 / pageHeight) + 1;
+
+                    // Adjust Y coordinates to be relative to the current page
+                    int pageOffsetY = (pageNo - 1) * pageHeight;
+                    y1 = y1 - pageOffsetY;
+                    y2 = y2 - pageOffsetY;
+
+                    positions.add(new ViewLinkPosition(i, docIndices.get(i), pageNo, x1, y1, x2, y2));
+                    log.info("Found view element {} at page {}: ({}, {}) to ({}, {}) width={} height={}",
+                            elementId, pageNo, x1, y1, x2, y2, x2-x1, y2-y1);
+                } else {
+                    log.warn("Could not find element with id: {}", elementId);
+                }
+            }
+        } catch (Exception e) {
+            log.error("Error extracting view positions from layout tree: {}", e.getMessage(), e);
+        }
+
+        return positions;
+    }
+
+    /**
+     * Calculates View link positions using fixed layout coordinates.
+     * Since we removed "View" text from HTML, we calculate positions based on:
+     * - Fixed X position for the View column (from calibration)
+     * - Y position calculated from row index and fixed row height
+     *
+     * Calibration data (from manual TT annotation on first View cell):
+     * - OmniDocs X1 = 675 (center of View column)
+     * - OmniDocs Y1 = 336 (first data row)
+     *
+     * @param pdfPath Path to the PDF file (used for page count)
+     * @param docIndices List of document indices for each View link
+     * @return List of ViewLinkPosition objects with calculated coordinates
+     */
+    private List<ViewLinkPosition> extractViewPositionsFromPdf(String pdfPath, List<String> docIndices) {
+        List<ViewLinkPosition> positions = new ArrayList<>();
+
+        // Fixed layout coordinates (calibrated from manual annotation testing)
+        // These values are in OmniDocs coordinate system (origin top-left, Y increases downward)
+        final int VIEW_X1 = 675;           // Left edge of "View" text position
+        final int VIEW_WIDTH = 40;         // Width of hyperlink area
+        final int VIEW_HEIGHT = 15;        // Height of hyperlink area
+        final int FIRST_ROW_Y = 336;       // Y position of first data row
+        final int ROW_HEIGHT = 30;         // Height between rows (calibrated)
+
+        log.info("=== Fixed Position Calculation for View Links ===");
+        log.info("Using calibrated coordinates: X1={}, FIRST_ROW_Y={}, ROW_HEIGHT={}",
+                VIEW_X1, FIRST_ROW_Y, ROW_HEIGHT);
+        log.info("Creating {} View link positions for documents", docIndices.size());
+
+        for (int rowIndex = 0; rowIndex < docIndices.size(); rowIndex++) {
+            int x1 = VIEW_X1;
+            int y1 = FIRST_ROW_Y + (rowIndex * ROW_HEIGHT);
+            int x2 = x1 + VIEW_WIDTH;
+            int y2 = y1 + VIEW_HEIGHT;
+            int pageNo = 1;  // Assuming all on page 1 for now
+
+            log.info("Row {}: docIndex={}, coords: x1={}, y1={}, x2={}, y2={}",
+                    rowIndex, docIndices.get(rowIndex), x1, y1, x2, y2);
+
+            positions.add(new ViewLinkPosition(rowIndex, docIndices.get(rowIndex), pageNo, x1, y1, x2, y2));
+        }
+
+        log.info("=== End Fixed Position Calculation ({} positions) ===", positions.size());
+
+        return positions;
+    }
+
+    /**
+     * Recursively searches for a box with the given element ID in the layout tree.
+     */
+    private org.xhtmlrenderer.render.Box findBoxById(org.xhtmlrenderer.render.Box box, String id) {
+        if (box == null) {
+            return null;
+        }
+
+        // Check if this box has the target ID
+        org.w3c.dom.Element element = box.getElement();
+        if (element != null && id.equals(element.getAttribute("id"))) {
+            return box;
+        }
+
+        // Recursively search children
+        for (int i = 0; i < box.getChildCount(); i++) {
+            org.xhtmlrenderer.render.Box child = box.getChild(i);
+            org.xhtmlrenderer.render.Box found = findBoxById(child, id);
+            if (found != null) {
+                return found;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Builds the OmniDocs annotation buffer for hyperlink annotations.
+     * Format matches the NewgenOne viewer hyperlink annotation structure.
+     *
+     * @param positions List of ViewLinkPosition objects with coordinates
+     * @param groupName The annotation group name (e.g., "ViewLinks")
+     * @param userId The user ID for the annotations
+     * @return The annotation buffer string in OmniDocs format
+     */
+    private String buildHyperlinkAnnotationBuffer(List<ViewLinkPosition> positions, String groupName, String userId) {
+        StringBuilder buffer = new StringBuilder();
+
+        // AnnotationBuffer format for OmniDocs - matches viewimageanno servlet format
+        // Include [GroupNameAnnotationHeader] section followed by annotation counts and hyperlink sections
+        buffer.append("[").append(groupName).append("AnnotationHeader]\n");
+        buffer.append("TotalAnnotations=").append(positions.size()).append("\n");
+        buffer.append("NoOfHyperlinks=").append(positions.size()).append("\n");
+
+        // Each hyperlink annotation
+        int index = 1;
+        for (ViewLinkPosition pos : positions) {
+            buffer.append("[").append(groupName).append("Hyperlink").append(index++).append("]\n");
+            buffer.append("X1=").append(pos.x1).append("\n");
+            buffer.append("Y1=").append(pos.y1).append("\n");
+            buffer.append("X2=").append(pos.x2).append("\n");
+            buffer.append("Y2=").append(pos.y2).append("\n");
+            buffer.append("Color=11141120\n");
+            buffer.append("TimeOrder=").append(getCurrentTimeOrder()).append("\n");
+            buffer.append("MouseSensitivity=1\n");
+            buffer.append("AnnotationGroupID=").append(groupName).append("\n");
+            buffer.append("UserID=").append(userId).append("\n");
+            buffer.append("Rights=VM\n");
+            buffer.append("HyperlinkName=View\n");
+            buffer.append("HyperlinkURL=http://google.com\n");
+            buffer.append("Height=-15\n");
+            buffer.append("Width=0\n");
+            buffer.append("Escapement=0\n");
+            buffer.append("Orientation=0\n");
+            buffer.append("Weight=400\n");
+            buffer.append("Italic=0\n");
+            buffer.append("Underlined=0\n");
+            buffer.append("StrikeOut=0\n");
+            buffer.append("CharSet=0\n");
+            buffer.append("OutPrecision=0\n");
+            buffer.append("ClipPrecision=0\n");
+            buffer.append("Quality=1\n");
+            buffer.append("PitchAndFamily=49\n");
+            buffer.append("FontName=Arial\n");
+            buffer.append("FontColor=11141120\n");
+        }
+
+        return buffer.toString();
+    }
+
+    /**
+     * Returns the current time in OmniDocs TimeOrder format: YYYY,MM,DD,HH,MM,SS
+     */
+    private String getCurrentTimeOrder() {
+        java.time.LocalDateTime now = java.time.LocalDateTime.now();
+        return String.format("%d,%02d,%02d,%02d,%02d,%02d",
+                now.getYear(), now.getMonthValue(), now.getDayOfMonth(),
+                now.getHour(), now.getMinute(), now.getSecond());
     }
 
     /**
@@ -1132,16 +1722,19 @@ public class NoteSheetService extends BaseIbpsService {
 
     /**
      * Renders document rows using the row template.
-     * Format: S.NO. | Document Name (hyperlinked) | DocumentIndex
+     * Format: S.NO. | Document Name (hyperlinked) | View
      * Skips documents whose name starts with "notesheet" (case-insensitive).
      *
      * @param documents JSON array of documents
      * @param rowTemplate HTML template for each row
      * @param viewerBaseUrl Base URL for document viewer (e.g., http://host:port/app/docs/viewer)
+     * @return RenderDocumentResult containing rendered HTML and document indices for position tracking
      */
-    private String renderDocumentRows(JsonNode documents, String rowTemplate, String viewerBaseUrl) {
+    private RenderDocumentResult renderDocumentRows(JsonNode documents, String rowTemplate, String viewerBaseUrl) {
         StringBuilder rows = new StringBuilder();
+        List<String> docIndices = new ArrayList<>();
         int sno = 1;
+        int rowIndex = 0;
 
         if (documents != null && documents.isArray()) {
             for (JsonNode doc : documents) {
@@ -1152,24 +1745,67 @@ public class NoteSheetService extends BaseIbpsService {
                 }
                 String docIndex = doc.path("documentIndex").asText("");
 
-                // Create hyperlink for document name if viewer URL is configured
-                String docNameHtml;
-                if (viewerBaseUrl != null && !viewerBaseUrl.isEmpty() && !docIndex.isEmpty()) {
-                    String viewerUrl = viewerBaseUrl + "?docIndex=" + docIndex;
-                    docNameHtml = "<a href=\"" + viewerUrl + "\" style=\"color: #0066cc; text-decoration: underline;\">" + escapeHtml(docName) + "</a>";
-                } else {
-                    docNameHtml = escapeHtml(docName);
-                }
+                // Document name is plain text - hyperlinks are added via View column annotations
+                String docNameHtml = escapeHtml(docName);
 
                 String row = rowTemplate
                         .replace("{{SNO}}", String.valueOf(sno++))
                         .replace("{{DOCUMENT_NAME}}", docNameHtml)
-                        .replace("{{DOCUMENT_INDEX}}", docIndex);
+                        .replace("{{DOCUMENT_INDEX}}", docIndex)
+                        .replace("{{ROW_INDEX}}", String.valueOf(rowIndex));
                 rows.append(row);
+                docIndices.add(docIndex);
+                rowIndex++;
             }
         }
 
-        return rows.toString();
+        return new RenderDocumentResult(rows.toString(), docIndices);
+    }
+
+    /**
+     * Result class for renderDocumentRows containing HTML and document indices.
+     */
+    private static class RenderDocumentResult {
+        final String html;
+        final List<String> docIndices;
+
+        RenderDocumentResult(String html, List<String> docIndices) {
+            this.html = html;
+            this.docIndices = docIndices;
+        }
+    }
+
+    /**
+     * Holds position information for a View hyperlink annotation.
+     */
+    private static class ViewLinkPosition {
+        final int rowIndex;
+        final String docIndex;
+        final int pageNo;
+        final int x1, y1, x2, y2;  // PDF coordinates (origin at top-left for OmniDocs)
+
+        ViewLinkPosition(int rowIndex, String docIndex, int pageNo, int x1, int y1, int x2, int y2) {
+            this.rowIndex = rowIndex;
+            this.docIndex = docIndex;
+            this.pageNo = pageNo;
+            this.x1 = x1;
+            this.y1 = y1;
+            this.x2 = x2;
+            this.y2 = y2;
+        }
+    }
+
+    /**
+     * Result class for PDF generation with position tracking.
+     */
+    private static class PdfGenerationResult {
+        final String pdfPath;
+        final List<ViewLinkPosition> viewPositions;
+
+        PdfGenerationResult(String pdfPath, List<ViewLinkPosition> viewPositions) {
+            this.pdfPath = pdfPath;
+            this.viewPositions = viewPositions;
+        }
     }
 
     /**
