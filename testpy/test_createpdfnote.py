@@ -10,10 +10,10 @@ import sys
 import os
 
 # Configuration
-BASE_URL = "http://localhost:8089"
-USERNAME = "supervisor"
+BASE_URL = "http://localhost:8080"
+USERNAME = "ashish"
 PASSWORD = "Sedin@123456"
-PROCESS_INSTANCE_ID = "e-Notes-000000000045-process"
+PROCESS_INSTANCE_ID = "e-Notes-000000000055-process"
 WORKITEM_ID = "1"
 
 def login():
@@ -38,15 +38,18 @@ def create_pdf_note(session_id):
     url = f"{BASE_URL}/notesheet/createpdfnote"
     params = {
         "processInstanceId": PROCESS_INSTANCE_ID,
-        "workitemId": WORKITEM_ID,
-        "sessionId": session_id
+        "workitemId": WORKITEM_ID
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "sessionId": str(session_id)
     }
 
     print(f"\nCalling createpdfnote...")
     print(f"  processInstanceId: {PROCESS_INSTANCE_ID}")
     print(f"  workitemId: {WORKITEM_ID}")
 
-    response = requests.post(url, params=params, headers={"Content-Type": "application/json"})
+    response = requests.post(url, params=params, headers=headers)
     data = response.json()
 
     print(f"\nResponse:")
@@ -56,14 +59,17 @@ def create_pdf_note(session_id):
 
 def get_annotations(session_id, document_index):
     """Get annotations for a document."""
-    url = f"{BASE_URL}/notesheet/annotations"
+    url = f"{BASE_URL}/notesheet/getannotations"
     params = {
-        "documentIndex": document_index,
-        "sessionId": session_id
+        "documentIndex": document_index
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "sessionId": str(session_id)
     }
 
     print(f"\nGetting annotations for document {document_index}...")
-    response = requests.get(url, params=params, headers={"Content-Type": "application/json"})
+    response = requests.get(url, params=params, headers=headers)
     data = response.json()
 
     print(f"\nAnnotations Response:")
