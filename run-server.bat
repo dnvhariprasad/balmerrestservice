@@ -10,7 +10,7 @@ REM Change to script directory
 cd /d "%~dp0"
 
 REM Check for process on port 8089 and kill it
-set "PORT=8089"
+set "PORT=8080"
 echo Checking for process on port %PORT%...
 
 set "PID="
