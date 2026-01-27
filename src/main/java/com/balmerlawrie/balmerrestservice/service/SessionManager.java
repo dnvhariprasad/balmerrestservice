@@ -60,6 +60,23 @@ public class SessionManager {
     }
 
     /**
+     * Gets a fresh session for the service account, bypassing cache.
+     *
+     * @return The new session ID, or null if authentication fails
+     */
+    public Long getFreshServiceSession() {
+        if (serviceAccountUsername == null || serviceAccountUsername.isEmpty() ||
+                serviceAccountPassword == null || serviceAccountPassword.isEmpty()) {
+            log.error("Service account credentials not configured in application.properties");
+            return null;
+        }
+
+        String decryptedPassword = EncryptionUtil.decrypt(serviceAccountPassword);
+        sessionCache.remove(serviceAccountUsername);
+        return createNewSession(serviceAccountUsername, decryptedPassword);
+    }
+
+    /**
      * Gets a valid session for the given user.
      * 
      * If a valid cached session exists, it is returned.

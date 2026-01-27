@@ -26,7 +26,7 @@ import java.util.UUID;
  * preservation.
  */
 @Service
-public class DocumentOpsService {
+public class DocumentOpsService extends BaseIbpsService {
 
     private static final Logger log = LoggerFactory.getLogger(DocumentOpsService.class);
 
@@ -36,7 +36,7 @@ public class DocumentOpsService {
     @Value("${omnidocs.checkin.url:${omnidocs.api.url}/../checkInDocumentJSON}")
     private String checkinUrl;
 
-    @Value("${omnidocs.cabinet.name:fosasoft}")
+    @Value("${omnidocs.cabinet.name:balmerlawrie}")
     private String cabinetName;
 
     @Value("${omnidocs.default.volumeId:1}")
@@ -50,6 +50,9 @@ public class DocumentOpsService {
 
     @Autowired
     private NoteSheetService noteSheetService;
+
+    @Autowired
+    private SessionManager sessionManager;
 
     private final ObjectMapper jsonMapper = new ObjectMapper();
 

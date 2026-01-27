@@ -511,8 +511,14 @@ public class NoteSheetService extends BaseIbpsService {
         ObjectNode result = mapper.createObjectNode();
         ArrayNode commentsList = result.putArray("comments");
 
-        // internal helper to find attribute (recursive or case-insensitive)
+        // Try known variations, then fallback to any attribute ending with "commentshistory"
         JsonNode historyAttr = attributes.path("Q_Eoffice_Commentshistory");
+        if (historyAttr.isMissingNode()) {
+            historyAttr = attributes.path("Q_commentshistory");
+        }
+        if (historyAttr.isMissingNode()) {
+            historyAttr = findAttributeBySuffix(attributes, "commentshistory");
+        }
 
         // If it's an array (Complex Array in iBPS)
         if (historyAttr.isArray()) {
@@ -558,6 +564,21 @@ public class NoteSheetService extends BaseIbpsService {
             return "";
         }
         return "";
+    }
+
+    private JsonNode findAttributeBySuffix(JsonNode attributes, String suffix) {
+        if (attributes == null || suffix == null) {
+            return jsonMapper.missingNode();
+        }
+        String target = suffix.toLowerCase();
+        java.util.Iterator<String> names = attributes.fieldNames();
+        while (names.hasNext()) {
+            String name = names.next();
+            if (name != null && name.toLowerCase().endsWith(target)) {
+                return attributes.path(name);
+            }
+        }
+        return jsonMapper.missingNode();
     }
 
     /**
@@ -1660,7 +1681,7 @@ public class NoteSheetService extends BaseIbpsService {
         final int VIEW_X1 = 675;           // X position of View column (calibrated)
         final int VIEW_WIDTH = 40;         // Width of hyperlink area
         final int VIEW_HEIGHT = 15;        // Height of hyperlink area
-        final int Y_ADJUST_OMNI = -10;     // Baseline tweak from manual calibration
+        final int Y_ADJUST_OMNI = 24;      // Move overlay down into data row (header + padding)
         final int HEADER_OFFSET_PTS = 65;  // Skip title + header rows when matching doc names
 
         log.info("=== Extracting View Positions by searching document names in PDF ===");
@@ -1840,8 +1861,12 @@ public class NoteSheetService extends BaseIbpsService {
         private final float maxX;
         float foundY = -1;
         int foundPage = -1;
+        float foundX1 = -1;
+        float foundX2 = -1;
         float firstFoundY = -1;
         int firstFoundPage = -1;
+        float firstFoundX1 = -1;
+        float firstFoundX2 = -1;
         private int currentPage = 0;
 
         DocumentNameFinder(String searchText, int minPage, float minY, float minX, float maxX) throws java.io.IOException {
@@ -1867,10 +1892,20 @@ public class NoteSheetService extends BaseIbpsService {
                 org.apache.pdfbox.text.TextPosition tp = textPositions.get(0);
                 float x = tp.getXDirAdj();
                 float y = tp.getYDirAdj();
+                float minTextX = Float.MAX_VALUE;
+                float maxTextX = -1f;
+                for (org.apache.pdfbox.text.TextPosition pos : textPositions) {
+                    float px = pos.getXDirAdj();
+                    float pw = pos.getWidthDirAdj();
+                    minTextX = Math.min(minTextX, px);
+                    maxTextX = Math.max(maxTextX, px + pw);
+                }
 
                 if (firstFoundY < 0) {
                     firstFoundY = y;
                     firstFoundPage = currentPage;
+                    firstFoundX1 = minTextX;
+                    firstFoundX2 = maxTextX;
                 }
 
                 boolean pageOk = currentPage > minPage || (currentPage == minPage && y >= minY);
@@ -1880,6 +1915,8 @@ public class NoteSheetService extends BaseIbpsService {
                     // Use getYDirAdj() for top-down coordinates (origin at top-left)
                     foundY = y;
                     foundPage = currentPage;
+                    foundX1 = minTextX;
+                    foundX2 = maxTextX;
                 }
             }
             super.writeString(text, textPositions);
@@ -1889,6 +1926,8 @@ public class NoteSheetService extends BaseIbpsService {
             if (foundY < 0 && firstFoundY >= 0) {
                 foundY = firstFoundY;
                 foundPage = firstFoundPage;
+                foundX1 = firstFoundX1;
+                foundX2 = firstFoundX2;
             }
         }
     }
