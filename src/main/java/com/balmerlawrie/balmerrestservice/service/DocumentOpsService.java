@@ -36,7 +36,7 @@ public class DocumentOpsService extends BaseIbpsService {
     @Value("${omnidocs.checkin.url:${omnidocs.api.url}/../checkInDocumentJSON}")
     private String checkinUrl;
 
-    @Value("${omnidocs.cabinet.name:balmerlawrie}")
+    @Value("${omnidocs.cabinet.name:fosasoft}")
     private String cabinetName;
 
     @Value("${omnidocs.default.volumeId:1}")
