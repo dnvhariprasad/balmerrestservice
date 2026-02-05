@@ -531,6 +531,11 @@ public class NoteSheetService extends BaseIbpsService {
                 comment.put("dateTime", getValue(item, "datetime")); // 2025-12-12 14:46:03.0
                 comment.put("comments", getValue(item, "comments"));
                 comment.put("stage", getValue(item, "stagename"));
+                String actionTaken = getValue(item, "actiontaken");
+                if (actionTaken == null || actionTaken.isEmpty()) {
+                    actionTaken = getValue(item, "email");
+                }
+                comment.put("actionTaken", actionTaken);
                 commentsList.add(comment);
             }
         } else if (!historyAttr.isMissingNode()) {
@@ -542,6 +547,11 @@ public class NoteSheetService extends BaseIbpsService {
             comment.put("comments", getValue(historyAttr, "comments"));
             comment.put("stage", getValue(historyAttr, "stagename"));
             comment.put("status", getValue(historyAttr, "email"));
+            String actionTaken = getValue(historyAttr, "actiontaken");
+            if (actionTaken == null || actionTaken.isEmpty()) {
+                actionTaken = getValue(historyAttr, "email");
+            }
+            comment.put("actionTaken", actionTaken);
             commentsList.add(comment);
         }
 
@@ -2128,7 +2138,8 @@ public class NoteSheetService extends BaseIbpsService {
                         .replace("{{DATE}}", comment.path("dateTime").asText(""))
                         .replace("{{COMMENT_TEXT}}", comment.path("comments").asText(""))
                         .replace("{{STAGE}}", comment.path("stage").asText(""))
-                        .replace("{{STATUS}}", comment.path("status").asText(""));
+                        .replace("{{STATUS}}", comment.path("actionTaken").asText(comment.path("status").asText("")))
+                        .replace("{{Actiontaken}}", comment.path("actionTaken").asText(""));
                 rows.append(row);
             }
         }
