@@ -1265,43 +1265,44 @@ public class NoteSheetService extends BaseIbpsService {
             }
 
             // Step 7: Add View hyperlink annotations (grouped by page)
-            log.info("Step 7: Adding View hyperlink annotations...");
+            // TEMPORARILY DISABLED per request
             int annotationsAdded = 0;
-            if (!viewPositions.isEmpty()) {
-                // Group positions by page number
-                java.util.Map<Integer, List<ViewLinkPosition>> positionsByPage = new java.util.LinkedHashMap<>();
-                for (ViewLinkPosition pos : viewPositions) {
-                    positionsByPage.computeIfAbsent(pos.pageNo, k -> new ArrayList<>()).add(pos);
-                }
-
-                log.info("View links distributed across {} page(s)", positionsByPage.size());
-
-                // Create separate annotation groups for each page
-                for (java.util.Map.Entry<Integer, List<ViewLinkPosition>> entry : positionsByPage.entrySet()) {
-                    int pageNo = entry.getKey();
-                    List<ViewLinkPosition> pagePositions = entry.getValue();
-                    String groupName = "ViewLinks_Page" + pageNo;
-
-                    log.info("Creating annotation group '{}' with {} hyperlinks for page {}",
-                            groupName, pagePositions.size(), pageNo);
-
-                    String annotBuffer = buildHyperlinkAnnotationBuffer(pagePositions, groupName, "system");
-                    ObjectNode annotGroup = jsonMapper.createObjectNode();
-                    annotGroup.put("AnnotationType", "A");  // "A" = Annotation type used by working hyperlinks
-                    annotGroup.put("PageNo", String.valueOf(pageNo));  // Set correct page number
-                    annotGroup.put("AnnotGroupName", groupName);
-                    annotGroup.put("AccessType", "S");  // Shared
-                    annotGroup.put("AnnotationBuffer", annotBuffer);
-
-                    JsonNode annotResult = setAnnotations(notedocumentIndex, annotGroup, sessionId);
-                    if (annotResult.path("success").asBoolean(false)) {
-                        annotationsAdded += pagePositions.size();
-                        log.info("Successfully added {} View hyperlink annotations for page {}", pagePositions.size(), pageNo);
-                    } else {
-                        log.warn("Failed to add View hyperlink annotations for page {}: {}", pageNo, annotResult.path("error").asText());
-                    }
-                }
-            }
+            // log.info("Step 7: Adding View hyperlink annotations...");
+            // if (!viewPositions.isEmpty()) {
+            //     // Group positions by page number
+            //     java.util.Map<Integer, List<ViewLinkPosition>> positionsByPage = new java.util.LinkedHashMap<>();
+            //     for (ViewLinkPosition pos : viewPositions) {
+            //         positionsByPage.computeIfAbsent(pos.pageNo, k -> new ArrayList<>()).add(pos);
+            //     }
+            //
+            //     log.info("View links distributed across {} page(s)", positionsByPage.size());
+            //
+            //     // Create separate annotation groups for each page
+            //     for (java.util.Map.Entry<Integer, List<ViewLinkPosition>> entry : positionsByPage.entrySet()) {
+            //         int pageNo = entry.getKey();
+            //         List<ViewLinkPosition> pagePositions = entry.getValue();
+            //         String groupName = "ViewLinks_Page" + pageNo;
+            //
+            //         log.info("Creating annotation group '{}' with {} hyperlinks for page {}",
+            //                 groupName, pagePositions.size(), pageNo);
+            //
+            //         String annotBuffer = buildHyperlinkAnnotationBuffer(pagePositions, groupName, "system");
+            //         ObjectNode annotGroup = jsonMapper.createObjectNode();
+            //         annotGroup.put("AnnotationType", "A");  // "A" = Annotation type used by working hyperlinks
+            //         annotGroup.put("PageNo", String.valueOf(pageNo));  // Set correct page number
+            //         annotGroup.put("AnnotGroupName", groupName);
+            //         annotGroup.put("AccessType", "S");  // Shared
+            //         annotGroup.put("AnnotationBuffer", annotBuffer);
+            //
+            //         JsonNode annotResult = setAnnotations(notedocumentIndex, annotGroup, sessionId);
+            //         if (annotResult.path("success").asBoolean(false)) {
+            //             annotationsAdded += pagePositions.size();
+            //             log.info("Successfully added {} View hyperlink annotations for page {}", pagePositions.size(), pageNo);
+            //         } else {
+            //             log.warn("Failed to add View hyperlink annotations for page {}: {}", pageNo, annotResult.path("error").asText());
+            //         }
+            //     }
+            // }
 
             // Build success response
             ObjectNode result = jsonMapper.createObjectNode();
@@ -2134,12 +2135,12 @@ public class NoteSheetService extends BaseIbpsService {
             for (JsonNode comment : comments) {
                 String row = rowTemplate
                         .replace("{{SNO}}", String.valueOf(sno++))
-                        .replace("{{USER}}", comment.path("userName").asText(""))
-                        .replace("{{DATE}}", comment.path("dateTime").asText(""))
-                        .replace("{{COMMENT_TEXT}}", comment.path("comments").asText(""))
-                        .replace("{{STAGE}}", comment.path("stage").asText(""))
-                        .replace("{{STATUS}}", comment.path("actionTaken").asText(comment.path("status").asText("")))
-                        .replace("{{Actiontaken}}", comment.path("actionTaken").asText(""));
+                        .replace("{{USER}}", escapeHtml(comment.path("userName").asText("")))
+                        .replace("{{DATE}}", escapeHtml(comment.path("dateTime").asText("")))
+                        .replace("{{COMMENT_TEXT}}", escapeHtml(comment.path("comments").asText("")))
+                        .replace("{{STAGE}}", escapeHtml(comment.path("stage").asText("")))
+                        .replace("{{STATUS}}", escapeHtml(comment.path("actionTaken").asText(comment.path("status").asText(""))))
+                        .replace("{{Actiontaken}}", escapeHtml(comment.path("actionTaken").asText("")));
                 rows.append(row);
             }
         }
