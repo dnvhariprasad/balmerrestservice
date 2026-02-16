@@ -1208,8 +1208,30 @@ public class NoteSheetService extends BaseIbpsService {
      * 6. Call checkoutCheckinWithAnnotations to update notesheet
      */
     public JsonNode createPdfNote(String processInstanceId, String workitemId, long sessionId) {
+        return createPdfNoteInternal(processInstanceId, workitemId, sessionId, "");
+    }
+
+    /**
+     * Creates a PDF note with an extra HTML section inserted before Supporting Documents.
+     * Used by legal print flow to include case details in the PDF.
+     */
+    public JsonNode createPdfNoteWithExtraSection(String processInstanceId, String workitemId, long sessionId,
+            String extraSectionHtml) {
+        return createPdfNoteInternal(processInstanceId, workitemId, sessionId, extraSectionHtml);
+    }
+
+    private JsonNode createPdfNoteInternal(String processInstanceId, String workitemId, long sessionId,
+            String extraSectionHtml) {
         log.info("Creating PDF note for processInstanceId: {}, workitemId: {}", processInstanceId, workitemId);
         String uniqueId = UUID.randomUUID().toString();
+        String sanitizedExtraSectionHtml = "";
+        if (extraSectionHtml != null && !extraSectionHtml.trim().isEmpty()) {
+            if (processInstanceId != null && processInstanceId.toLowerCase().contains("legal")) {
+                sanitizedExtraSectionHtml = extraSectionHtml;
+            } else {
+                log.info("Ignoring extra section HTML for non-legal processInstanceId: {}", processInstanceId);
+            }
+        }
 
         try {
             // Step 1: Call getOriginalNotesheet
@@ -1249,7 +1271,8 @@ public class NoteSheetService extends BaseIbpsService {
             // Step 5: Generate PDF with documents, comments, and track View positions
             log.info("Step 5: Generating PDF with documents, comments, and position tracking...");
             JsonNode commentsArray = commentsResult.path("comments");
-            PdfGenerationResult pdfResult = generatePdfWithPositions(htmlFilePath, documentsArray, commentsArray, uniqueId);
+            PdfGenerationResult pdfResult = generatePdfWithPositions(
+                    htmlFilePath, documentsArray, commentsArray, uniqueId, sanitizedExtraSectionHtml);
             String pdfPath = pdfResult.pdfPath;
             List<ViewLinkPosition> viewPositions = pdfResult.viewPositions;
             log.info("PDF generated at: {} with {} view positions", pdfPath, viewPositions.size());
@@ -1347,7 +1370,13 @@ public class NoteSheetService extends BaseIbpsService {
      * Generates PDF from original HTML content with supporting documents and appended comments.
      * Also tracks the positions of View elements for hyperlink annotation creation.
      */
-    private PdfGenerationResult generatePdfWithPositions(String htmlFilePath, JsonNode documents, JsonNode comments, String uniqueId) throws Exception {
+    private PdfGenerationResult generatePdfWithPositions(String htmlFilePath, JsonNode documents, JsonNode comments,
+            String uniqueId) throws Exception {
+        return generatePdfWithPositions(htmlFilePath, documents, comments, uniqueId, "");
+    }
+
+    private PdfGenerationResult generatePdfWithPositions(String htmlFilePath, JsonNode documents, JsonNode comments,
+            String uniqueId, String extraSectionHtml) throws Exception {
         // Read original HTML content
         String htmlContent = new String(Files.readAllBytes(Paths.get(htmlFilePath)));
 
@@ -1370,7 +1399,8 @@ public class NoteSheetService extends BaseIbpsService {
         // Clean up HTML entities and wrap in XHTML document structure
         // The original content is HTML fragments, we need to wrap in proper XHTML
         // Documents section comes ABOVE comments section per user requirement
-        String bodyContent = htmlContent + documentsSection + commentsSection;
+        String extraSection = (extraSectionHtml == null) ? "" : extraSectionHtml;
+        String bodyContent = htmlContent + extraSection + documentsSection + commentsSection;
 
         // Replace HTML entities that are not valid in XHTML
         bodyContent = bodyContent.replace("&nbsp;", "&#160;");
