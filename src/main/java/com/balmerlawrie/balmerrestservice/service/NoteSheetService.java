@@ -510,49 +510,20 @@ public class NoteSheetService extends BaseIbpsService {
         ObjectMapper mapper = new ObjectMapper();
         ObjectNode result = mapper.createObjectNode();
         ArrayNode commentsList = result.putArray("comments");
-
-        // Try known variations, then fallback to any attribute ending with "commentshistory"
-        JsonNode historyAttr = attributes.path("Q_Eoffice_Commentshistory");
-        if (historyAttr.isMissingNode()) {
-            historyAttr = attributes.path("Q_commentshistory");
-        }
-        if (historyAttr.isMissingNode()) {
-            historyAttr = findAttributeBySuffix(attributes, "commentshistory");
-        }
-
-        // If it's an array (Complex Array in iBPS)
-        if (historyAttr.isArray()) {
-            for (JsonNode item : historyAttr) {
-                ObjectNode comment = mapper.createObjectNode();
-
-                // Extract useful fields
-                comment.put("userName", getValue(item, "username"));
-                comment.put("userId", getValue(item, "userid"));
-                comment.put("dateTime", getValue(item, "datetime")); // 2025-12-12 14:46:03.0
-                comment.put("comments", getValue(item, "comments"));
-                comment.put("stage", getValue(item, "stagename"));
-                String actionTaken = getValue(item, "actiontaken");
-                if (actionTaken == null || actionTaken.isEmpty()) {
-                    actionTaken = getValue(item, "email");
+        java.util.Map<String, JsonNode> historyAttrs = new java.util.LinkedHashMap<>();
+        java.util.Iterator<String> names = attributes.fieldNames();
+        while (names.hasNext()) {
+            String name = names.next();
+            if (name != null && name.toLowerCase().endsWith("commentshistory")) {
+                JsonNode node = attributes.path(name);
+                if (!node.isMissingNode()) {
+                    historyAttrs.put(name.toLowerCase(), node);
                 }
-                comment.put("actionTaken", actionTaken);
-                commentsList.add(comment);
             }
-        } else if (!historyAttr.isMissingNode()) {
-            // Single object?
-            ObjectNode comment = mapper.createObjectNode();
-            comment.put("userName", getValue(historyAttr, "username"));
-            comment.put("userId", getValue(historyAttr, "userid"));
-            comment.put("dateTime", getValue(historyAttr, "datetime"));
-            comment.put("comments", getValue(historyAttr, "comments"));
-            comment.put("stage", getValue(historyAttr, "stagename"));
-            comment.put("status", getValue(historyAttr, "email"));
-            String actionTaken = getValue(historyAttr, "actiontaken");
-            if (actionTaken == null || actionTaken.isEmpty()) {
-                actionTaken = getValue(historyAttr, "email");
-            }
-            comment.put("actionTaken", actionTaken);
-            commentsList.add(comment);
+        }
+
+        for (JsonNode historyAttr : historyAttrs.values()) {
+            appendCommentsFromNode(historyAttr, commentsList, mapper);
         }
 
         result.put("success", true);
@@ -562,34 +533,122 @@ public class NoteSheetService extends BaseIbpsService {
     }
 
     private String getValue(JsonNode parent, String key) {
-        if (parent.has(key)) {
-            // iBPS attributes often have text in the node itself or empty key ""
-            JsonNode node = parent.get(key);
-            if (node.has(""))
-                return node.get("").asText();
-            // If it's just text
-            if (node.isTextual())
-                return node.asText();
-            // If it is object but no "" key, try to stringify or return empty
+        if (parent == null || !parent.isObject()) {
             return "";
         }
+
+        JsonNode node = findFieldIgnoreCase(parent, key);
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return "";
+        }
+
+        // iBPS attributes often have text in "" or content/#text keys
+        JsonNode emptyKeyValue = node.path("");
+        if (!emptyKeyValue.isMissingNode() && !emptyKeyValue.isNull()) {
+            return emptyKeyValue.asText("");
+        }
+
+        JsonNode contentValue = node.path("content");
+        if (!contentValue.isMissingNode() && !contentValue.isNull()) {
+            return contentValue.asText("");
+        }
+
+        JsonNode textValue = node.path("#text");
+        if (!textValue.isMissingNode() && !textValue.isNull()) {
+            return textValue.asText("");
+        }
+
+        if (node.isTextual() || node.isNumber() || node.isBoolean()) {
+            return node.asText("");
+        }
+
         return "";
     }
 
-    private JsonNode findAttributeBySuffix(JsonNode attributes, String suffix) {
-        if (attributes == null || suffix == null) {
-            return jsonMapper.missingNode();
+    private void appendCommentsFromNode(JsonNode node, ArrayNode commentsList, ObjectMapper mapper) {
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return;
         }
-        String target = suffix.toLowerCase();
-        java.util.Iterator<String> names = attributes.fieldNames();
+
+        if (node.isArray()) {
+            for (JsonNode item : node) {
+                appendCommentsFromNode(item, commentsList, mapper);
+            }
+            return;
+        }
+
+        if (node.isTextual()) {
+            String text = node.asText("").trim();
+            if ((text.startsWith("{") && text.endsWith("}")) || (text.startsWith("[") && text.endsWith("]"))) {
+                try {
+                    JsonNode parsed = mapper.readTree(text);
+                    appendCommentsFromNode(parsed, commentsList, mapper);
+                } catch (Exception ignored) {
+                    // Non-JSON text; ignore
+                }
+            }
+            return;
+        }
+
+        if (!node.isObject()) {
+            return;
+        }
+
+        String userName = getValue(node, "username");
+        String userId = getValue(node, "userid");
+        String dateTime = getValue(node, "datetime");
+        String comments = getValue(node, "comments");
+        String stage = getValue(node, "stagename");
+        String status = getValue(node, "email");
+        String actionTaken = getValue(node, "actiontaken");
+        if (actionTaken == null || actionTaken.isEmpty()) {
+            actionTaken = status;
+        }
+
+        boolean looksLikeComment = !(isBlank(userName) && isBlank(dateTime) && isBlank(comments) && isBlank(stage)
+                && isBlank(actionTaken));
+        if (looksLikeComment) {
+            ObjectNode comment = mapper.createObjectNode();
+            comment.put("userName", userName);
+            comment.put("userId", userId);
+            comment.put("dateTime", dateTime);
+            comment.put("comments", comments);
+            comment.put("stage", stage);
+            comment.put("status", status);
+            comment.put("actionTaken", actionTaken);
+            commentsList.add(comment);
+        }
+
+        java.util.Iterator<java.util.Map.Entry<String, JsonNode>> fields = node.fields();
+        while (fields.hasNext()) {
+            java.util.Map.Entry<String, JsonNode> field = fields.next();
+            String name = field.getKey();
+            JsonNode value = field.getValue();
+            if (name == null || value == null || !value.isContainerNode()) {
+                continue;
+            }
+            appendCommentsFromNode(value, commentsList, mapper);
+        }
+    }
+
+    private JsonNode findFieldIgnoreCase(JsonNode node, String targetKey) {
+        if (node == null || !node.isObject() || targetKey == null) {
+            return null;
+        }
+        java.util.Iterator<String> names = node.fieldNames();
         while (names.hasNext()) {
             String name = names.next();
-            if (name != null && name.toLowerCase().endsWith(target)) {
-                return attributes.path(name);
+            if (targetKey.equalsIgnoreCase(name)) {
+                return node.path(name);
             }
         }
-        return jsonMapper.missingNode();
+        return null;
     }
+
+    private boolean isBlank(String value) {
+        return value == null || value.trim().isEmpty();
+    }
+
 
     /**
      * Dumps work item details to a temp file for debugging.
@@ -1405,10 +1464,22 @@ public class NoteSheetService extends BaseIbpsService {
         // Replace HTML entities that are not valid in XHTML
         bodyContent = bodyContent.replace("&nbsp;", "&#160;");
         bodyContent = bodyContent.replace("&amp;", "&#38;");
+        bodyContent = bodyContent.replaceAll("&(?!(#\\d+|#x[0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]+);)", "&amp;");
         // Fix self-closing tags for XHTML compliance
-        bodyContent = bodyContent.replaceAll("<br>", "<br/>");
-        bodyContent = bodyContent.replaceAll("<hr>", "<hr/>");
-        bodyContent = bodyContent.replaceAll("<img([^>]*)>", "<img$1/>");
+        bodyContent = bodyContent.replaceAll("(?i)<br\\b([^>]*?)(?:\\s*/)?>", "<br$1/>");
+        bodyContent = bodyContent.replaceAll("(?i)<hr\\b([^>]*?)(?:\\s*/)?>", "<hr$1/>");
+        bodyContent = bodyContent.replaceAll("(?i)<img\\b([^>]*?)(?:\\s*/)?>", "<img$1/>");
+        bodyContent = bodyContent.replaceAll("(?i)<input\\b([^>]*?)(?:\\s*/)?>", "<input$1/>");
+        bodyContent = bodyContent.replaceAll("(?i)<meta\\b([^>]*?)(?:\\s*/)?>", "<meta$1/>");
+        bodyContent = bodyContent.replaceAll("(?i)<link\\b([^>]*?)(?:\\s*/)?>", "<link$1/>");
+        bodyContent = bodyContent.replaceAll("(?i)<base\\b([^>]*?)(?:\\s*/)?>", "<base$1/>");
+        bodyContent = bodyContent.replaceAll("(?i)<area\\b([^>]*?)(?:\\s*/)?>", "<area$1/>");
+        bodyContent = bodyContent.replaceAll("(?i)<col\\b([^>]*?)(?:\\s*/)?>", "<col$1/>");
+        bodyContent = bodyContent.replaceAll("(?i)<embed\\b([^>]*?)(?:\\s*/)?>", "<embed$1/>");
+        bodyContent = bodyContent.replaceAll("(?i)<param\\b([^>]*?)(?:\\s*/)?>", "<param$1/>");
+        bodyContent = bodyContent.replaceAll("(?i)<source\\b([^>]*?)(?:\\s*/)?>", "<source$1/>");
+        bodyContent = bodyContent.replaceAll("(?i)<track\\b([^>]*?)(?:\\s*/)?>", "<track$1/>");
+        bodyContent = bodyContent.replaceAll("(?i)<wbr\\b([^>]*?)(?:\\s*/)?>", "<wbr$1/>");
         // Remove HTML comments that contain -- which is invalid in XML
         bodyContent = bodyContent.replaceAll("<!--.*?-->", "");
         // Remove any other comment-like patterns that might be problematic
