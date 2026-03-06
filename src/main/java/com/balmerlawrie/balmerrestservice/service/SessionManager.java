@@ -71,10 +71,9 @@ public class SessionManager {
             return null;
         }
 
-        // Decrypt the password before using it
+
         String decryptedPassword = EncryptionUtil.decrypt(serviceAccountPassword);
 
-        // Invalidate any cached session for the service account before creating a new one
         sessionCache.remove(serviceAccountUsername);
         return createNewSession(serviceAccountUsername, decryptedPassword);
     }

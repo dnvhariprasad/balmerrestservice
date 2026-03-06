@@ -26,7 +26,7 @@ import java.util.UUID;
  * preservation.
  */
 @Service
-public class DocumentOpsService {
+public class DocumentOpsService extends BaseIbpsService {
 
     private static final Logger log = LoggerFactory.getLogger(DocumentOpsService.class);
 
@@ -50,6 +50,9 @@ public class DocumentOpsService {
 
     @Autowired
     private NoteSheetService noteSheetService;
+
+    @Autowired
+    private SessionManager sessionManager;
 
     private final ObjectMapper jsonMapper = new ObjectMapper();
 
