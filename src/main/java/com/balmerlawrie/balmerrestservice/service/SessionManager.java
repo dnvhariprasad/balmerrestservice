@@ -71,7 +71,9 @@ public class SessionManager {
             return null;
         }
 
+
         String decryptedPassword = EncryptionUtil.decrypt(serviceAccountPassword);
+
         sessionCache.remove(serviceAccountUsername);
         return createNewSession(serviceAccountUsername, decryptedPassword);
     }
