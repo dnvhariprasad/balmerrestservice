@@ -9,11 +9,14 @@ import json
 import sys
 import os
 
-# Configuration
-BASE_URL = "http://localhost:8080"
-USERNAME = "ashish"
-PASSWORD = "Sedin@123456"
-PROCESS_INSTANCE_ID = "e-Notes-000000000055-process"
+# Configuration — uses shared config if available, with local overrides
+try:
+    from config import BASE_URL, USERNAME, PASSWORD
+except ImportError:
+    BASE_URL = "http://localhost:8089"
+    USERNAME = "supervisor"
+    PASSWORD = "Sedin@123456"
+PROCESS_INSTANCE_ID = "e-Notes-000000000093-process"
 WORKITEM_ID = "1"
 
 def login():
@@ -122,6 +125,9 @@ def main():
         # Parse and display View hyperlink coordinates
         if annotations.get("success"):
             annot_data = annotations.get("annotations", {})
+            if not isinstance(annot_data, dict):
+                print("No annotations on this document (empty or non-dict).")
+                annot_data = {}
             groups = annot_data.get("AnnotationGroup", [])
             if not isinstance(groups, list):
                 groups = [groups]

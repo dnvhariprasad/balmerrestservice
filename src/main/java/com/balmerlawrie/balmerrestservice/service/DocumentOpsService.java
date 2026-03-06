@@ -86,23 +86,35 @@ public class DocumentOpsService extends BaseIbpsService {
         try {
             // Step 1: Get annotations and save temporarily
             log.info("Step 1: Backing up annotations...");
-            JsonNode annotationsResult = noteSheetService.getAnnotations(documentIndex, sessionId);
-            JsonNode annotations = annotationsResult.path("annotations");
-
+            boolean hasAnnotations = false;
             String annotationBackupPath = null;
-            JsonNode filteredAnnotations = annotations;
+            JsonNode filteredAnnotations = null;
 
-            if (!annotations.isMissingNode() && annotations.size() > 0) {
-                annotationBackupPath = saveAnnotationsToTemp(documentIndex, annotations);
-                log.info("Annotations backed up to: {}", annotationBackupPath);
+            try {
+                JsonNode annotationsResult = noteSheetService.getAnnotations(documentIndex, sessionId);
+                JsonNode annotations = annotationsResult.path("annotations");
 
-                // Filter out View hyperlink annotations if requested
-                if (filterViewHyperlinks) {
-                    filteredAnnotations = filterViewHyperlinkAnnotations(annotations);
+                if (!annotations.isMissingNode() && annotations.size() > 0) {
+                    hasAnnotations = true;
+                    annotationBackupPath = saveAnnotationsToTemp(documentIndex, annotations);
+                    log.info("Annotations backed up to: {}", annotationBackupPath);
+
+                    // Filter out View hyperlink annotations if requested
+                    filteredAnnotations = filterViewHyperlinks
+                            ? filterViewHyperlinkAnnotations(annotations)
+                            : annotations;
                     log.info("Filtered View hyperlink annotations from backup");
+                } else {
+                    log.info("No annotations found to backup.");
                 }
-            } else {
-                log.info("No annotations found to backup.");
+            } catch (Exception annotEx) {
+                // Annotation fetch failed — abort to prevent silent annotation loss
+                log.error("Failed to fetch/backup annotations for document {}: {}", documentIndex, annotEx.getMessage());
+                ObjectNode errorResult = jsonMapper.createObjectNode();
+                errorResult.put("success", false);
+                errorResult.put("error", "Cannot proceed with checkin: annotation backup failed. " +
+                        "Aborting to prevent annotation loss. Cause: " + annotEx.getMessage());
+                return errorResult;
             }
 
             // Step 2: Force undo checkout (in case already checked out)
@@ -135,7 +147,8 @@ public class DocumentOpsService extends BaseIbpsService {
             // Step 5: Restore annotations (using filtered annotations if applicable)
             log.info("Step 5: Restoring annotations...");
             JsonNode restoreResult = null;
-            if (annotationBackupPath != null && !filteredAnnotations.isMissingNode() && filteredAnnotations.size() > 0) {
+            if (hasAnnotations && filteredAnnotations != null
+                    && !filteredAnnotations.isMissingNode() && filteredAnnotations.size() > 0) {
                 restoreResult = noteSheetService.setAnnotations(documentIndex, filteredAnnotations, sessionId);
                 log.info("Annotations restored.");
             }
@@ -145,7 +158,7 @@ public class DocumentOpsService extends BaseIbpsService {
             result.put("success", true);
             result.put("documentIndex", documentIndex);
             result.put("newVersion", newVersion);
-            result.put("annotationsBackedUp", annotationBackupPath != null);
+            result.put("annotationsBackedUp", hasAnnotations);
             result.put("annotationsRestored", restoreResult != null);
             result.put("viewHyperlinksFiltered", filterViewHyperlinks);
             if (annotationBackupPath != null) {
@@ -265,18 +278,19 @@ public class DocumentOpsService extends BaseIbpsService {
     private String removeViewHyperlinksFromBuffer(String buffer) {
         try {
             String[] lines = buffer.split("\n");
+            // headerSection accumulates the [*AnnotationHeader] line (written to output after counts are known)
+            StringBuilder headerSection = new StringBuilder();
             StringBuilder result = new StringBuilder();
             boolean inHyperlinkSection = false;
+            boolean inHeaderSection = false;
             boolean isViewHyperlink = false;
             StringBuilder currentSection = new StringBuilder();
-            int totalAnnotations = 0;
-            int noOfHyperlinks = 0;
             int filteredHyperlinks = 0;
 
             for (String line : lines) {
                 line = line.trim();
 
-                // Check for section headers
+                // Check for hyperlink section headers: [GroupNameHyperlink1], etc.
                 if (line.matches("\\[.*Hyperlink\\d+\\]")) {
                     // Save previous section if it wasn't a View hyperlink
                     if (inHyperlinkSection && !isViewHyperlink && currentSection.length() > 0) {
@@ -285,11 +299,12 @@ public class DocumentOpsService extends BaseIbpsService {
                     }
 
                     inHyperlinkSection = true;
+                    inHeaderSection = false;
                     isViewHyperlink = false;
                     currentSection = new StringBuilder();
                     currentSection.append(line).append("\n");
                 } else if (line.startsWith("[") && line.endsWith("]")) {
-                    // Other section header - save previous hyperlink section if valid
+                    // Other section header — save previous hyperlink section if valid
                     if (inHyperlinkSection && !isViewHyperlink && currentSection.length() > 0) {
                         result.append(currentSection);
                         filteredHyperlinks++;
@@ -298,11 +313,13 @@ public class DocumentOpsService extends BaseIbpsService {
                     inHyperlinkSection = false;
                     isViewHyperlink = false;
 
-                    // Handle header sections
                     if (line.contains("AnnotationHeader")) {
-                        currentSection = new StringBuilder();
-                        currentSection.append(line).append("\n");
+                        // Start accumulating header section (will be emitted with updated counts)
+                        inHeaderSection = true;
+                        headerSection = new StringBuilder();
+                        headerSection.append(line).append("\n");
                     } else {
+                        inHeaderSection = false;
                         result.append(line).append("\n");
                     }
                 } else if (inHyperlinkSection) {
@@ -310,12 +327,12 @@ public class DocumentOpsService extends BaseIbpsService {
                     if (line.equals("HyperlinkName=View")) {
                         isViewHyperlink = true;
                     }
-                } else if (line.startsWith("TotalAnnotations=")) {
-                    totalAnnotations = Integer.parseInt(line.split("=")[1]);
-                    // Will be updated after filtering
-                } else if (line.startsWith("NoOfHyperlinks=")) {
-                    noOfHyperlinks = Integer.parseInt(line.split("=")[1]);
-                    // Will be updated after filtering
+                } else if (inHeaderSection) {
+                    // Inside the header section — skip TotalAnnotations/NoOfHyperlinks
+                    // (they will be rewritten with correct counts)
+                    if (!line.startsWith("TotalAnnotations=") && !line.startsWith("NoOfHyperlinks=")) {
+                        headerSection.append(line).append("\n");
+                    }
                 } else {
                     result.append(line).append("\n");
                 }
@@ -327,21 +344,18 @@ public class DocumentOpsService extends BaseIbpsService {
                 filteredHyperlinks++;
             }
 
-            // Update counts in the header
-            String filteredBuffer = result.toString();
             if (filteredHyperlinks == 0) {
                 return null; // No annotations left
             }
 
-            // Update TotalAnnotations and NoOfHyperlinks in the buffer
-            filteredBuffer = filteredBuffer.replaceFirst(
-                    "TotalAnnotations=\\d+",
-                    "TotalAnnotations=" + filteredHyperlinks);
-            filteredBuffer = filteredBuffer.replaceFirst(
-                    "NoOfHyperlinks=\\d+",
-                    "NoOfHyperlinks=" + filteredHyperlinks);
+            // Rebuild: header section with correct counts, then the filtered hyperlink sections
+            StringBuilder finalBuffer = new StringBuilder();
+            finalBuffer.append(headerSection);
+            finalBuffer.append("TotalAnnotations=").append(filteredHyperlinks).append("\n");
+            finalBuffer.append("NoOfHyperlinks=").append(filteredHyperlinks).append("\n");
+            finalBuffer.append(result);
 
-            return filteredBuffer;
+            return finalBuffer.toString();
 
         } catch (Exception e) {
             log.error("Error parsing annotation buffer: {}", e.getMessage(), e);
@@ -443,9 +457,14 @@ public class DocumentOpsService extends BaseIbpsService {
     }
 
     /**
-     * Checks out a document.
+     * Checks out a document. If already checked out (-50146/50011), performs one
+     * undo-checkout and retries exactly once to avoid unbounded recursion.
      */
     private JsonNode checkoutDocument(String documentIndex, long sessionId) {
+        return checkoutDocumentInternal(documentIndex, sessionId, false);
+    }
+
+    private JsonNode checkoutDocumentInternal(String documentIndex, long sessionId, boolean isRetry) {
         try {
             ObjectNode docNode = jsonMapper.createObjectNode();
             docNode.put("DocumentIndex", documentIndex);
@@ -476,19 +495,16 @@ public class DocumentOpsService extends BaseIbpsService {
             headers.setContentType(MediaType.APPLICATION_JSON);
             HttpEntity<String> request = new HttpEntity<>(payload.toString(), headers);
 
-            log.info("=== CHECKOUT REQUEST DEBUG ===");
+            log.info("=== CHECKOUT REQUEST{} ===", isRetry ? " (RETRY)" : "");
             log.info("API URL: {}", omniDocsApiUrl);
             log.info("Document Index: {}", documentIndex);
             log.info("Session ID (UserDBId): {}", sessionId);
             log.info("Cabinet Name: {}", cabinetName);
-            log.info("Request Payload: {}", payload.toString());
 
             ResponseEntity<String> response = restTemplate.exchange(omniDocsApiUrl, HttpMethod.POST, request,
                     String.class);
 
-            log.info("=== CHECKOUT RESPONSE DEBUG ===");
-            log.info("HTTP Status: {}", response.getStatusCode());
-            log.info("Response Body: {}", response.getBody());
+            log.info("Checkout HTTP Status: {}", response.getStatusCode());
 
             JsonNode responseJson = jsonMapper.readTree(response.getBody());
             JsonNode output = responseJson.path("NGOExecuteAPIResponseBDO").path("outputData")
@@ -511,21 +527,16 @@ public class DocumentOpsService extends BaseIbpsService {
                 result.put("version", doc.path("DocumentVersionNo").asText(""));
                 log.info("Checkout successful - Version: {}", doc.path("DocumentVersionNo").asText(""));
                 return result;
-            } else if ("-50146".equals(status) || "50011".equals(status)) {
-                // Already checked out - retry after undo
-                log.info("Document already checked out, retrying after undo...");
+            } else if (("-50146".equals(status) || "50011".equals(status)) && !isRetry) {
+                // Already checked out — undo and retry exactly once
+                log.info("Document already checked out, undoing and retrying once...");
                 undoCheckout(documentIndex, sessionId);
-                return checkoutDocument(documentIndex, sessionId);
+                return checkoutDocumentInternal(documentIndex, sessionId, true);
             } else {
                 String errorMsg = getOmniDocsErrorMessage(status);
-                log.error("=== CHECKOUT FAILED ===");
-                log.error("Error Code: {}", status);
-                log.error("Error Message: {}", errorMsg);
-                log.error("OmniDocs Error Description: {}", errorDescription);
-                log.error("Document Index: {}", documentIndex);
-                log.error("Session ID: {}", sessionId);
-                log.error("Cabinet: {}", cabinetName);
-                log.error("Full Response: {}", response.getBody());
+                log.error("=== CHECKOUT FAILED{} ===", isRetry ? " (AFTER RETRY)" : "");
+                log.error("Error Code: {}, Message: {}, Description: {}", status, errorMsg, errorDescription);
+                log.error("Document Index: {}, Session ID: {}, Cabinet: {}", documentIndex, sessionId, cabinetName);
 
                 ObjectNode result = jsonMapper.createObjectNode();
                 result.put("success", false);
@@ -537,10 +548,7 @@ public class DocumentOpsService extends BaseIbpsService {
             }
 
         } catch (Exception e) {
-            log.error("=== CHECKOUT EXCEPTION ===");
-            log.error("Document Index: {}", documentIndex);
-            log.error("Session ID: {}", sessionId);
-            log.error("Exception: {}", e.getMessage(), e);
+            log.error("Checkout exception for doc {}: {}", documentIndex, e.getMessage(), e);
             ObjectNode result = jsonMapper.createObjectNode();
             result.put("success", false);
             result.put("error", e.getMessage());

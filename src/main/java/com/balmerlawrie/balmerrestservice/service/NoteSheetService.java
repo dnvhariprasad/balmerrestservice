@@ -990,7 +990,7 @@ public class NoteSheetService extends BaseIbpsService {
 
     /**
      * Downloads a document with annotations burned into the PDF.
-     * Uses PDFBox to render annotations onto the document.
+     * Uses Aspose.PDF to render annotations onto the document.
      *
      * @param documentIndex Document Index
      * @param sessionId     Session ID for authentication
@@ -1021,10 +1021,10 @@ public class NoteSheetService extends BaseIbpsService {
                 return documentContent;
             }
 
-            // Step 3: Load PDF with PDFBox
-            try (org.apache.pdfbox.pdmodel.PDDocument pdfDoc =
-                    org.apache.pdfbox.pdmodel.PDDocument.load(documentContent)) {
-
+            // Step 3: Load PDF with Aspose
+            com.aspose.pdf.Document pdfDoc = new com.aspose.pdf.Document(
+                    new java.io.ByteArrayInputStream(documentContent));
+            try {
                 // Step 4: Process each annotation group
                 JsonNode groupsNode = annotations.path("AnnotationGroup");
                 if (groupsNode.isMissingNode()) {
@@ -1043,15 +1043,15 @@ public class NoteSheetService extends BaseIbpsService {
                 log.info("Processing {} annotation groups", groupList.size());
 
                 for (JsonNode group : groupList) {
-                    int pageNo = group.path("PageNo").asInt(1) - 1; // Convert to 0-based
+                    int pageNo = group.path("PageNo").asInt(1); // 1-based for Aspose
                     String buffer = group.path("AnnotationBuffer").asText("");
 
-                    if (buffer.isEmpty() || pageNo < 0 || pageNo >= pdfDoc.getNumberOfPages()) {
+                    if (buffer.isEmpty() || pageNo < 1 || pageNo > pdfDoc.getPages().size()) {
                         continue;
                     }
 
-                    org.apache.pdfbox.pdmodel.PDPage page = pdfDoc.getPage(pageNo);
-                    float pageHeight = page.getMediaBox().getHeight();
+                    com.aspose.pdf.Page page = pdfDoc.getPages().get_Item(pageNo);
+                    float pageHeight = (float) page.getRect().getHeight();
 
                     // Parse and render annotations from buffer
                     renderAnnotationsFromBuffer(pdfDoc, page, buffer, pageHeight);
@@ -1062,6 +1062,8 @@ public class NoteSheetService extends BaseIbpsService {
                 pdfDoc.save(baos);
                 log.info("Generated PDF with annotations: {} bytes", baos.size());
                 return baos.toByteArray();
+            } finally {
+                pdfDoc.close();
             }
 
         } catch (Exception e) {
@@ -1071,55 +1073,47 @@ public class NoteSheetService extends BaseIbpsService {
     }
 
     /**
-     * Parses annotation buffer and renders annotations onto a PDF page.
+     * Parses annotation buffer and renders annotations onto a PDF page using Aspose.
      * Annotation buffer format is INI-style with sections like [GroupNameAnnotation1]
      */
-    private void renderAnnotationsFromBuffer(org.apache.pdfbox.pdmodel.PDDocument doc,
-            org.apache.pdfbox.pdmodel.PDPage page, String buffer, float pageHeight) {
+    private void renderAnnotationsFromBuffer(com.aspose.pdf.Document doc,
+            com.aspose.pdf.Page page, String buffer, float pageHeight) {
 
-        try (org.apache.pdfbox.pdmodel.PDPageContentStream cs =
-                new org.apache.pdfbox.pdmodel.PDPageContentStream(doc, page,
-                    org.apache.pdfbox.pdmodel.PDPageContentStream.AppendMode.APPEND, true, true)) {
+        // Parse the buffer into sections
+        String[] lines = buffer.split("\n");
+        java.util.Map<String, String> currentSection = null;
+        String currentSectionName = "";
 
-            // Parse the buffer into sections
-            String[] lines = buffer.split("\n");
-            java.util.Map<String, String> currentSection = null;
-            String currentSectionName = "";
+        for (String line : lines) {
+            line = line.trim();
+            if (line.isEmpty()) continue;
 
-            for (String line : lines) {
-                line = line.trim();
-                if (line.isEmpty()) continue;
-
-                if (line.startsWith("[") && line.endsWith("]")) {
-                    // Process previous section if exists
-                    if (currentSection != null && !currentSection.isEmpty()) {
-                        renderAnnotation(cs, currentSectionName, currentSection, pageHeight);
-                    }
-                    // Start new section
-                    currentSectionName = line.substring(1, line.length() - 1);
-                    currentSection = new java.util.HashMap<>();
-                } else if (line.contains("=") && currentSection != null) {
-                    int idx = line.indexOf("=");
-                    String key = line.substring(0, idx).trim();
-                    String value = line.substring(idx + 1).trim();
-                    currentSection.put(key, value);
+            if (line.startsWith("[") && line.endsWith("]")) {
+                // Process previous section if exists
+                if (currentSection != null && !currentSection.isEmpty()) {
+                    renderAnnotation(doc, page, currentSectionName, currentSection, pageHeight);
                 }
+                // Start new section
+                currentSectionName = line.substring(1, line.length() - 1);
+                currentSection = new java.util.HashMap<>();
+            } else if (line.contains("=") && currentSection != null) {
+                int idx = line.indexOf("=");
+                String key = line.substring(0, idx).trim();
+                String value = line.substring(idx + 1).trim();
+                currentSection.put(key, value);
             }
+        }
 
-            // Process last section
-            if (currentSection != null && !currentSection.isEmpty()) {
-                renderAnnotation(cs, currentSectionName, currentSection, pageHeight);
-            }
-
-        } catch (Exception e) {
-            log.error("Error rendering annotations: {}", e.getMessage(), e);
+        // Process last section
+        if (currentSection != null && !currentSection.isEmpty()) {
+            renderAnnotation(doc, page, currentSectionName, currentSection, pageHeight);
         }
     }
 
     /**
-     * Renders a single annotation based on its type.
+     * Renders a single annotation based on its type using Aspose.PDF annotations.
      */
-    private void renderAnnotation(org.apache.pdfbox.pdmodel.PDPageContentStream cs,
+    private void renderAnnotation(com.aspose.pdf.Document doc, com.aspose.pdf.Page page,
             String sectionName, java.util.Map<String, String> props, float pageHeight) {
 
         try {
@@ -1135,19 +1129,16 @@ public class NoteSheetService extends BaseIbpsService {
                 type = "TEXTSTAMP";
             } else if (sectionName.contains("Highlight") || sectionName.contains("HLT")) {
                 type = "HIGHLIGHT";
-            } else if (sectionName.contains("FreeHand") || sectionName.contains("FRH")) {
-                type = "FREEHAND";
             }
 
-            // Get coordinates (OmniDocs: Y from top, PDFBox: Y from bottom)
+            // Get coordinates (OmniDocs: Y from top; Aspose: Y from bottom)
             float x1 = parseFloat(props.get("X1"), 0);
             float y1 = parseFloat(props.get("Y1"), 0);
             float x2 = parseFloat(props.get("X2"), 0);
             float y2 = parseFloat(props.get("Y2"), 0);
 
-            // Convert OmniDocs coordinates to PDFBox coordinates
-            // OmniDocs uses a scale factor relative to PDF coordinates
-            float scale = pageHeight / 1040f; // Approximate OmniDocs page height
+            // Convert OmniDocs coordinates to Aspose coordinates
+            float scale = pageHeight / 1040f;
             float pdfX1 = x1 * scale;
             float pdfY1 = pageHeight - (y1 * scale);
             float pdfX2 = x2 * scale;
@@ -1155,63 +1146,70 @@ public class NoteSheetService extends BaseIbpsService {
 
             // Parse color (OmniDocs stores as integer)
             int colorInt = parseInt(props.get("Color"), 0);
-            float r = ((colorInt >> 16) & 0xFF) / 255f;
-            float g = ((colorInt >> 8) & 0xFF) / 255f;
-            float b = (colorInt & 0xFF) / 255f;
+            int r = (colorInt >> 16) & 0xFF;
+            int g = (colorInt >> 8) & 0xFF;
+            int b = colorInt & 0xFF;
+            com.aspose.pdf.Color color = com.aspose.pdf.Color.fromRgb(
+                    new java.awt.Color(r, g, b));
+
+            com.aspose.pdf.Rectangle rect = new com.aspose.pdf.Rectangle(
+                    Math.min(pdfX1, pdfX2), Math.min(pdfY1, pdfY2),
+                    Math.max(pdfX1, pdfX2), Math.max(pdfY1, pdfY2));
 
             switch (type) {
                 case "LINE":
-                    cs.setStrokingColor(r, g, b);
-                    cs.setLineWidth(1f);
-                    cs.moveTo(pdfX1, pdfY1);
-                    cs.lineTo(pdfX2, pdfY2);
-                    cs.stroke();
+                    com.aspose.pdf.LineAnnotation lineAnnot = new com.aspose.pdf.LineAnnotation(
+                            page, rect,
+                            new com.aspose.pdf.Point(pdfX1, pdfY1),
+                            new com.aspose.pdf.Point(pdfX2, pdfY2));
+                    lineAnnot.setColor(color);
+                    page.getAnnotations().add(lineAnnot);
                     break;
 
                 case "BOX":
-                    cs.setStrokingColor(r, g, b);
-                    cs.setLineWidth(1f);
-                    float width = Math.abs(pdfX2 - pdfX1);
-                    float height = Math.abs(pdfY2 - pdfY1);
-                    cs.addRect(Math.min(pdfX1, pdfX2), Math.min(pdfY1, pdfY2), width, height);
-                    cs.stroke();
+                    com.aspose.pdf.SquareAnnotation boxAnnot = new com.aspose.pdf.SquareAnnotation(page, rect);
+                    boxAnnot.setColor(color);
+                    page.getAnnotations().add(boxAnnot);
                     break;
 
                 case "HIGHLIGHT":
-                    cs.setNonStrokingColor(r, g, b);
-                    cs.addRect(Math.min(pdfX1, pdfX2), Math.min(pdfY1, pdfY2),
-                            Math.abs(pdfX2 - pdfX1), Math.abs(pdfY2 - pdfY1));
-                    // Use transparency effect by drawing a semi-transparent rectangle
-                    // Note: PDFBox basic content stream doesn't support transparency directly
-                    // For now, just fill with color
-                    cs.fill();
+                    com.aspose.pdf.HighlightAnnotation hlAnnot = new com.aspose.pdf.HighlightAnnotation(page, rect);
+                    hlAnnot.setColor(color);
+                    page.getAnnotations().add(hlAnnot);
                     break;
 
                 case "HYPERLINK":
-                    // Draw hyperlink text
                     String linkName = props.getOrDefault("HyperlinkName", "View");
-                    cs.beginText();
-                    cs.setFont(org.apache.pdfbox.pdmodel.font.PDType1Font.HELVETICA, 10);
-                    cs.setNonStrokingColor(0, 0, 1); // Blue for hyperlinks
-                    cs.newLineAtOffset(pdfX1, pdfY1);
-                    cs.showText(linkName);
-                    cs.endText();
+                    String linkUrl = props.getOrDefault("HyperlinkURL", "");
+                    // Add as a link annotation with text
+                    com.aspose.pdf.LinkAnnotation linkAnnot = new com.aspose.pdf.LinkAnnotation(page, rect);
+                    if (!linkUrl.isEmpty()) {
+                        linkAnnot.setAction(new com.aspose.pdf.GoToURIAction(linkUrl));
+                    }
+                    linkAnnot.setColor(com.aspose.pdf.Color.getBlue());
+                    page.getAnnotations().add(linkAnnot);
+                    // Add visible text stamp for the hyperlink label
+                    com.aspose.pdf.TextStamp textStamp = new com.aspose.pdf.TextStamp(linkName);
+                    textStamp.setXIndent(pdfX1);
+                    textStamp.setYIndent(Math.min(pdfY1, pdfY2));
+                    textStamp.getTextState().setFontSize(10);
+                    textStamp.getTextState().setForegroundColor(com.aspose.pdf.Color.getBlue());
+                    page.addStamp(textStamp);
                     break;
 
                 case "TEXTSTAMP":
                     String text = props.getOrDefault("StampText", "");
                     if (!text.isEmpty()) {
-                        cs.beginText();
-                        cs.setFont(org.apache.pdfbox.pdmodel.font.PDType1Font.HELVETICA, 10);
-                        cs.setNonStrokingColor(r, g, b);
-                        cs.newLineAtOffset(pdfX1, pdfY1);
-                        cs.showText(text);
-                        cs.endText();
+                        com.aspose.pdf.TextStamp stamp = new com.aspose.pdf.TextStamp(text);
+                        stamp.setXIndent(pdfX1);
+                        stamp.setYIndent(Math.min(pdfY1, pdfY2));
+                        stamp.getTextState().setFontSize(10);
+                        stamp.getTextState().setForegroundColor(color);
+                        page.addStamp(stamp);
                     }
                     break;
 
                 default:
-                    // Unknown type, skip
                     break;
             }
         } catch (Exception e) {
@@ -1283,6 +1281,8 @@ public class NoteSheetService extends BaseIbpsService {
             String extraSectionHtml) {
         log.info("Creating PDF note for processInstanceId: {}, workitemId: {}", processInstanceId, workitemId);
         String uniqueId = UUID.randomUUID().toString();
+        // Track temp files for cleanup
+        List<Path> tempFilesToCleanup = new ArrayList<>();
         String sanitizedExtraSectionHtml = "";
         if (extraSectionHtml != null && !extraSectionHtml.trim().isEmpty()) {
             if (processInstanceId != null && processInstanceId.toLowerCase().contains("legal")) {
@@ -1335,6 +1335,17 @@ public class NoteSheetService extends BaseIbpsService {
             String pdfPath = pdfResult.pdfPath;
             List<ViewLinkPosition> viewPositions = pdfResult.viewPositions;
             log.info("PDF generated at: {} with {} view positions", pdfPath, viewPositions.size());
+
+            // Track temp files for cleanup
+            tempFilesToCleanup.add(Paths.get(pdfPath));
+            tempFilesToCleanup.add(Paths.get(commentsPath));
+            // Debug HTML file
+            Path debugHtml = Paths.get(tempDirectory).resolve("debug-" + uniqueId + ".html");
+            if (Files.exists(debugHtml)) {
+                tempFilesToCleanup.add(debugHtml);
+            }
+            // Original notesheet temp file
+            tempFilesToCleanup.add(Paths.get(htmlFilePath));
 
             // Step 6: Call checkoutCheckinWithAnnotations (with filtering of existing View hyperlinks)
             log.info("Step 6: Updating notesheet with new PDF...");
@@ -1403,6 +1414,9 @@ public class NoteSheetService extends BaseIbpsService {
         } catch (Exception e) {
             log.error("Error creating PDF note: {}", e.getMessage(), e);
             return createErrorResponse("Error creating PDF note", e.getMessage());
+        } finally {
+            // Cleanup temp files (PDF, comments, debug HTML, original notesheet download)
+            cleanupTempFiles(tempFilesToCleanup);
         }
     }
 
@@ -1410,7 +1424,7 @@ public class NoteSheetService extends BaseIbpsService {
      * Saves comments JSON to a temp file.
      */
     private String saveCommentsToFile(JsonNode commentsResult, String uniqueId) throws IOException {
-        Path tempDir = Paths.get(tempDirectory.replace("notesheets", "comments"));
+        Path tempDir = Paths.get(tempDirectory).getParent().resolve("comments");
         if (!Files.exists(tempDir)) {
             Files.createDirectories(tempDir);
         }
@@ -1426,6 +1440,22 @@ public class NoteSheetService extends BaseIbpsService {
     }
 
     /**
+     * Deletes temp files, logging warnings for any that fail.
+     */
+    private void cleanupTempFiles(List<Path> files) {
+        for (Path file : files) {
+            try {
+                if (file != null && Files.exists(file)) {
+                    Files.delete(file);
+                    log.debug("Cleaned up temp file: {}", file);
+                }
+            } catch (IOException e) {
+                log.warn("Failed to delete temp file {}: {}", file, e.getMessage());
+            }
+        }
+    }
+
+    /**
      * Generates PDF from original HTML content with supporting documents and appended comments.
      * Also tracks the positions of View elements for hyperlink annotation creation.
      */
@@ -1436,8 +1466,23 @@ public class NoteSheetService extends BaseIbpsService {
 
     private PdfGenerationResult generatePdfWithPositions(String htmlFilePath, JsonNode documents, JsonNode comments,
             String uniqueId, String extraSectionHtml) throws Exception {
-        // Read original HTML content
-        String htmlContent = new String(Files.readAllBytes(Paths.get(htmlFilePath)));
+        // Read original content (from Froala editor — may contain Word-pasted tables)
+        byte[] rawBytes = Files.readAllBytes(Paths.get(htmlFilePath));
+
+        // Detect binary/docx files: DOCX files start with PK (ZIP magic bytes 0x504B)
+        if (rawBytes.length >= 4 && rawBytes[0] == 0x50 && rawBytes[1] == 0x4B) {
+            throw new IllegalArgumentException(
+                    "Original notesheet appears to be a DOCX/ZIP file, not HTML. " +
+                    "The Froala editor should save content as HTML. File: " + htmlFilePath);
+        }
+
+        String htmlContent = new String(rawBytes, StandardCharsets.UTF_8);
+
+        // Sanitize Word/Froala HTML to prevent table truncation in PDF:
+        // 1. Convert absolute pixel widths on tables to 100% so they fit within the page
+        // 2. Convert absolute pixel widths on table cells to percentages or remove them
+        // 3. Remove Word-specific mso-* CSS properties that can interfere with rendering
+        htmlContent = sanitizeHtmlForPdf(htmlContent);
 
         // Load document templates
         String documentListTemplate = loadTemplate("templates/document_list_template.html");
@@ -1455,47 +1500,23 @@ public class NoteSheetService extends BaseIbpsService {
         String commentRows = renderCommentRows(comments, rowTemplate);
         String commentsSection = commentTemplate.replace("{{COMMENTS_ROWS}}", commentRows);
 
-        // Clean up HTML entities and wrap in XHTML document structure
-        // The original content is HTML fragments, we need to wrap in proper XHTML
         // Documents section comes ABOVE comments section per user requirement
-        String extraSection = (extraSectionHtml == null) ? "" : extraSectionHtml;
+        // Sanitize extra section HTML too (e.g., legal print form may have Word-pasted content)
+        String extraSection = (extraSectionHtml == null || extraSectionHtml.isEmpty())
+                ? "" : sanitizeHtmlForPdf(extraSectionHtml);
         String bodyContent = htmlContent + extraSection + documentsSection + commentsSection;
 
-        // Replace HTML entities that are not valid in XHTML
-        bodyContent = bodyContent.replace("&nbsp;", "&#160;");
-        bodyContent = bodyContent.replace("&amp;", "&#38;");
-        bodyContent = bodyContent.replaceAll("&(?!(#\\d+|#x[0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]+);)", "&amp;");
-        // Fix self-closing tags for XHTML compliance
-        bodyContent = bodyContent.replaceAll("(?i)<br\\b([^>]*?)(?:\\s*/)?>", "<br$1/>");
-        bodyContent = bodyContent.replaceAll("(?i)<hr\\b([^>]*?)(?:\\s*/)?>", "<hr$1/>");
-        bodyContent = bodyContent.replaceAll("(?i)<img\\b([^>]*?)(?:\\s*/)?>", "<img$1/>");
-        bodyContent = bodyContent.replaceAll("(?i)<input\\b([^>]*?)(?:\\s*/)?>", "<input$1/>");
-        bodyContent = bodyContent.replaceAll("(?i)<meta\\b([^>]*?)(?:\\s*/)?>", "<meta$1/>");
-        bodyContent = bodyContent.replaceAll("(?i)<link\\b([^>]*?)(?:\\s*/)?>", "<link$1/>");
-        bodyContent = bodyContent.replaceAll("(?i)<base\\b([^>]*?)(?:\\s*/)?>", "<base$1/>");
-        bodyContent = bodyContent.replaceAll("(?i)<area\\b([^>]*?)(?:\\s*/)?>", "<area$1/>");
-        bodyContent = bodyContent.replaceAll("(?i)<col\\b([^>]*?)(?:\\s*/)?>", "<col$1/>");
-        bodyContent = bodyContent.replaceAll("(?i)<embed\\b([^>]*?)(?:\\s*/)?>", "<embed$1/>");
-        bodyContent = bodyContent.replaceAll("(?i)<param\\b([^>]*?)(?:\\s*/)?>", "<param$1/>");
-        bodyContent = bodyContent.replaceAll("(?i)<source\\b([^>]*?)(?:\\s*/)?>", "<source$1/>");
-        bodyContent = bodyContent.replaceAll("(?i)<track\\b([^>]*?)(?:\\s*/)?>", "<track$1/>");
-        bodyContent = bodyContent.replaceAll("(?i)<wbr\\b([^>]*?)(?:\\s*/)?>", "<wbr$1/>");
-        // Remove HTML comments that contain -- which is invalid in XML
-        bodyContent = bodyContent.replaceAll("<!--.*?-->", "");
-        // Remove any other comment-like patterns that might be problematic
-        bodyContent = bodyContent.replaceAll("<!\\[CDATA\\[.*?\\]\\]>", "");
-
-        // Wrap in proper XHTML document
-        String fullHtml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" +
-                "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\" " +
-                "\"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\">\n" +
-                "<html xmlns=\"http://www.w3.org/1999/xhtml\">\n" +
+        // Wrap in HTML document — Aspose handles regular HTML directly, no XHTML conversion needed
+        // CSS body margin is 0 — page margins are controlled by Aspose PageInfo to avoid double margins.
+        // table-layout is set to 'auto' so Aspose can calculate column widths based on content,
+        // preventing truncation of long document names or comment text.
+        // overflow-wrap ensures long unbreakable strings wrap instead of overflowing cells.
+        String fullHtml = "<html>\n" +
                 "<head>\n" +
-                "  <meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\"/>\n" +
-                "  <style type=\"text/css\">\n" +
-                "    body { font-family: Arial, sans-serif; font-size: 12px; margin: 20px; }\n" +
-                "    table { border-collapse: collapse; width: 100%; }\n" +
-                "    td, th { border: 1px solid #333; padding: 8px; }\n" +
+                "  <style>\n" +
+                "    body { font-family: Arial, sans-serif; font-size: 12px; margin: 0; padding: 0; }\n" +
+                "    table { border-collapse: collapse; width: 100%; table-layout: auto; }\n" +
+                "    td, th { border: 1px solid #333; padding: 8px; overflow-wrap: break-word; word-wrap: break-word; }\n" +
                 "  </style>\n" +
                 "</head>\n" +
                 "<body>\n" +
@@ -1503,7 +1524,7 @@ public class NoteSheetService extends BaseIbpsService {
                 "</body>\n" +
                 "</html>";
 
-        // Convert HTML to PDF using Flying Saucer
+        // Convert HTML to PDF using Aspose.PDF
         Path tempDir = Paths.get(tempDirectory);
         if (!Files.exists(tempDir)) {
             Files.createDirectories(tempDir);
@@ -1512,275 +1533,50 @@ public class NoteSheetService extends BaseIbpsService {
         String pdfFileName = "newNoteContent-" + uniqueId + ".pdf";
         Path pdfPath = tempDir.resolve(pdfFileName);
 
-        List<ViewLinkPosition> viewPositions = new ArrayList<>();
+        // Configure Aspose page layout
+        // - A4 landscape-ready page size (default A4 portrait: 595 x 842 points)
+        // - 20pt margins on all sides → usable width = 555pt
+        // - IsRenderToSinglePage=false ensures multi-page support
+        com.aspose.pdf.HtmlLoadOptions htmlOptions = new com.aspose.pdf.HtmlLoadOptions();
+        htmlOptions.setPageInfo(new com.aspose.pdf.PageInfo());
+        htmlOptions.getPageInfo().setWidth(595);
+        htmlOptions.getPageInfo().setHeight(842);
+        htmlOptions.getPageInfo().setMargin(new com.aspose.pdf.MarginInfo(20, 20, 20, 20));
+        // Scale content to fit within the page width so nothing gets cut off
+        htmlOptions.setPageLayoutOption(com.aspose.pdf.HtmlPageLayoutOption.ScaleToPageWidth);
 
-        // Create renderer and layout FIRST (needed for PDF generation)
-        org.xhtmlrenderer.pdf.ITextRenderer renderer = new org.xhtmlrenderer.pdf.ITextRenderer();
-        renderer.setDocumentFromString(fullHtml);
-        renderer.layout();
-
-        // Now write the PDF to file
-        try (java.io.OutputStream os = new FileOutputStream(pdfPath.toFile())) {
-            renderer.createPDF(os);
+        // Save debug HTML only when DEBUG logging is enabled (avoid disk bloat in production)
+        if (log.isDebugEnabled()) {
+            Path htmlDebugPath = tempDir.resolve("debug-" + uniqueId + ".html");
+            Files.writeString(htmlDebugPath, fullHtml, StandardCharsets.UTF_8);
+            log.debug("Debug HTML saved to: {}", htmlDebugPath.toAbsolutePath());
         }
 
-        // Extract View positions using PDFBox from the actual rendered PDF
-        // Use PDFBox for Y (text baseline) and fixed OmniDocs X for column alignment
-        viewPositions = extractViewPositionsFromPdf(pdfPath.toAbsolutePath().toString(), docResult.docIndices, docResult.docNames);
+        try (java.io.ByteArrayInputStream htmlStream =
+                new java.io.ByteArrayInputStream(fullHtml.getBytes(StandardCharsets.UTF_8))) {
+            com.aspose.pdf.Document pdfDoc = new com.aspose.pdf.Document(htmlStream, htmlOptions);
+            try {
+                pdfDoc.save(pdfPath.toAbsolutePath().toString());
+            } finally {
+                pdfDoc.close();
+            }
+        }
+
+        // Extract View positions from the generated PDF using Aspose
+        List<ViewLinkPosition> viewPositions = extractViewPositionsFromPdf(
+                pdfPath.toAbsolutePath().toString(), docResult.docIndices, docResult.docNames);
         log.info("Extracted {} view link positions from PDF for annotation creation", viewPositions.size());
         return new PdfGenerationResult(pdfPath.toAbsolutePath().toString(), viewPositions);
     }
 
     /**
-     * Extracts View element positions from Flying Saucer renderer using element IDs.
-     * Uses the layout tree to find elements with id="view-cell-0", "view-cell-1", etc.
-     *
-     * Coordinate conversion (Codex fix):
-     * - Flying Saucer uses "dots" (pixels at 72 DPI * dotsPerPoint)
-     * - OmniDocs uses a normalized 0-1040 coordinate space for page height
-     * - Must get ACTUAL page height from renderer's page boxes
-     * - Apply scale: omniCoord = pdfCoord * (1040 / pageHeightPts)
-     */
-    private List<ViewLinkPosition> extractViewPositionsFromRenderer(org.xhtmlrenderer.pdf.ITextRenderer renderer, List<String> docIndices) {
-        List<ViewLinkPosition> positions = new ArrayList<>();
-
-        try {
-            org.xhtmlrenderer.render.BlockBox rootBox = renderer.getRootBox();
-            float dotsPerPoint = renderer.getDotsPerPoint();
-
-            // Get ACTUAL page height from Flying Saucer's page boxes
-            @SuppressWarnings("unchecked")
-            java.util.List<org.xhtmlrenderer.render.PageBox> pages = rootBox.getLayer().getPages();
-            int totalPages = pages.size();
-
-            System.out.println("=== Page Debug Info ===");
-            System.out.println("Total pages from Flying Saucer: " + totalPages);
-
-            // Get the actual page height from the first page (works for 1+ pages)
-            org.xhtmlrenderer.layout.LayoutContext layoutContext = renderer.getSharedContext().newLayoutContextInstance();
-            float pageHeightDots = 842f * dotsPerPoint;  // Default A4
-            if (totalPages > 0) {
-                org.xhtmlrenderer.render.PageBox firstPage = pages.get(0);
-                int firstPageHeight = firstPage.getHeight(layoutContext);
-                if (firstPageHeight > 0) {
-                    pageHeightDots = firstPageHeight;
-                }
-            }
-            if (totalPages >= 2) {
-                // Log page boundary delta for debugging
-                org.xhtmlrenderer.render.PageBox page1 = pages.get(0);
-                org.xhtmlrenderer.render.PageBox page2 = pages.get(1);
-                int page1Top = page1.getTop();
-                int page2Top = page2.getTop();
-                System.out.println("Page 1 top: " + page1Top + ", Page 2 top: " + page2Top);
-                System.out.println("Calculated pageHeightDots from page boundaries: " + (page2Top - page1Top));
-            }
-
-            // Also print all page boundaries for debugging
-            for (int p = 0; p < totalPages; p++) {
-                org.xhtmlrenderer.render.PageBox pg = pages.get(p);
-                System.out.println("  Page " + (p+1) + ": top=" + pg.getTop() + ", bottom=" + pg.getBottom());
-            }
-
-            float pageHeightPts = pageHeightDots / dotsPerPoint;
-
-            // OmniDocs uses 0-1040 coordinate space - calculate scale factor
-            float omniScale = 1040f / pageHeightPts;
-
-            System.out.println("=== Flying Saucer Coordinate Extraction (with OmniDocs scale) ===");
-            System.out.println("dotsPerPoint: " + dotsPerPoint);
-            System.out.println("pageHeightDots: " + pageHeightDots);
-            System.out.println("pageHeightPts: " + pageHeightPts);
-            System.out.println("omniScale (1040/pageHeight): " + omniScale);
-            System.out.println("Document has " + docIndices.size() + " view elements to find");
-
-            for (int i = 0; i < docIndices.size(); i++) {
-                String elementId = "view-cell-" + i;
-                org.xhtmlrenderer.render.Box box = findBoxById(rootBox, elementId);
-
-                if (box != null) {
-                    // Get raw coordinates from Flying Saucer (in dots)
-                    int rawAbsX = box.getAbsX();
-                    int rawAbsY = box.getAbsY();
-                    int rawWidth = box.getWidth();
-                    int rawHeight = box.getHeight();
-
-                    System.out.println("Element '" + elementId + "' RAW coords (dots): absX=" + rawAbsX +
-                            ", absY=" + rawAbsY + ", width=" + rawWidth + ", height=" + rawHeight);
-
-                    // If width is 0, try parent (TD cell)
-                    if (rawWidth <= 0) {
-                        org.xhtmlrenderer.render.Box parent = box.getParent();
-                        if (parent != null && parent.getWidth() > 0) {
-                            rawWidth = parent.getWidth();
-                            rawAbsX = parent.getAbsX();
-                            System.out.println("  Using parent: absX=" + rawAbsX + ", width=" + rawWidth);
-                        }
-                    }
-
-                    // Ensure minimum dimensions
-                    if (rawWidth <= 0) rawWidth = (int) (40 * dotsPerPoint);
-                    if (rawHeight <= 0) rawHeight = (int) (20 * dotsPerPoint);
-
-                    // Calculate page number using page boundaries (dots)
-                    int pageNo = 1;
-                    float pageTopDots = 0f;
-                    if (totalPages > 0) {
-                        boolean foundPage = false;
-                        for (int p = 0; p < totalPages; p++) {
-                            org.xhtmlrenderer.render.PageBox pg = pages.get(p);
-                            int top = pg.getTop();
-                            int bottom = pg.getBottom();
-                            if (rawAbsY >= top && rawAbsY < bottom) {
-                                pageNo = p + 1;
-                                pageTopDots = top;
-                                foundPage = true;
-                                break;
-                            }
-                        }
-                        if (!foundPage) {
-                            pageNo = Math.max(1, (int) (rawAbsY / pageHeightDots) + 1);
-                            pageTopDots = (pageNo - 1) * pageHeightDots;
-                        }
-                    } else {
-                        pageNo = Math.max(1, (int) (rawAbsY / pageHeightDots) + 1);
-                        pageTopDots = (pageNo - 1) * pageHeightDots;
-                    }
-
-                    // Get Y position relative to current page (still in dots)
-                    float adjAbsY = rawAbsY - pageTopDots;
-
-                    // Align text within the cell (approximate baseline for 12px font)
-                    final float fontSizePts = 12f;
-                    final float lineHeightPts = 14.4f; // 1.2 * font size
-                    float lineHeightDots = lineHeightPts * dotsPerPoint;
-                    float ascentDots = fontSizePts * 0.8f * dotsPerPoint;
-                    if (rawHeight <= 0) {
-                        rawHeight = Math.round(lineHeightDots);
-                    }
-                    float baselineOffsetDots = Math.max(0f, (rawHeight - lineHeightDots) / 2f + ascentDots);
-
-                    // Convert to PDF points, then scale to OmniDocs 0-1040 coordinates
-                    int x1 = Math.round((rawAbsX / dotsPerPoint) * omniScale);
-                    int y1 = Math.round(((adjAbsY + baselineOffsetDots) / dotsPerPoint) * omniScale);
-                    int x2 = Math.round(((rawAbsX + rawWidth) / dotsPerPoint) * omniScale);
-                    int textHeightOmni = Math.round(fontSizePts * omniScale);
-                    int y2 = y1 + textHeightOmni;
-
-                    System.out.println("  Page " + pageNo + ": OmniDocs coords: (" + x1 + "," + y1 + ") to (" + x2 + "," + y2 + ")");
-
-                    positions.add(new ViewLinkPosition(i, docIndices.get(i), pageNo, x1, y1, x2, y2));
-                } else {
-                    System.out.println("WARNING: Could not find element with id: " + elementId);
-                }
-            }
-
-            System.out.println("=== End Coordinate Extraction (" + positions.size() + " positions found) ===");
-
-        } catch (Exception e) {
-            log.error("Error extracting view positions: {}", e.getMessage(), e);
-        }
-
-        return positions;
-    }
-
-    /**
-     * Extracts the positions of view-N span elements from the Flying Saucer layout tree.
-     * These positions are used to create hyperlink annotations in OmniDocs.
-     *
-     * @param renderer The ITextRenderer after layout() has been called
-     * @param docIndices List of document indices corresponding to each row
-     * @return List of ViewLinkPosition objects with coordinates for each view element
-     */
-    private List<ViewLinkPosition> extractViewPositions(org.xhtmlrenderer.pdf.ITextRenderer renderer, List<String> docIndices) {
-        List<ViewLinkPosition> positions = new ArrayList<>();
-
-        try {
-            org.xhtmlrenderer.render.BlockBox rootBox = renderer.getRootBox();
-
-            // Get page dimensions - A4 is 595 x 842 points
-            float dotsPerPoint = renderer.getDotsPerPoint();
-
-            // Find all elements with id starting with "view-cell-"
-            for (int i = 0; i < docIndices.size(); i++) {
-                String elementId = "view-cell-" + i;
-                org.xhtmlrenderer.render.Box box = findBoxById(rootBox, elementId);
-
-                if (box != null) {
-                    // Get absolute position in document coordinates
-                    int absX = box.getAbsX();
-                    int absY = box.getAbsY();
-                    int width = box.getWidth();
-                    int height = box.getHeight();
-
-                    // If width is 0 (inline element), try to get parent's width or use minimum
-                    // "View" text is approximately 30 points wide, 15 points tall
-                    if (width <= 0) {
-                        // Try to get parent box (the TD cell)
-                        org.xhtmlrenderer.render.Box parent = box.getParent();
-                        if (parent != null && parent.getWidth() > 0) {
-                            width = parent.getWidth();
-                            absX = parent.getAbsX();
-                        } else {
-                            // Fallback: use minimum width for "View" text (30 points * dotsPerPoint)
-                            width = (int) (30 * dotsPerPoint);
-                        }
-                    }
-                    if (height <= 0) {
-                        // Minimum height for text (15 points * dotsPerPoint)
-                        height = (int) (15 * dotsPerPoint);
-                    }
-
-                    // Convert to PDF points (divide by dotsPerPoint)
-                    int x1 = (int) (absX / dotsPerPoint);
-                    int y1 = (int) (absY / dotsPerPoint);
-                    int x2 = (int) ((absX + width) / dotsPerPoint);
-                    int y2 = (int) ((absY + height) / dotsPerPoint);
-
-                    // Determine which page this element is on
-                    // Each page is typically 842 points (A4 height)
-                    int pageHeight = 842; // A4 page height in points
-                    int pageNo = (y1 / pageHeight) + 1;
-
-                    // Adjust Y coordinates to be relative to the current page
-                    int pageOffsetY = (pageNo - 1) * pageHeight;
-                    y1 = y1 - pageOffsetY;
-                    y2 = y2 - pageOffsetY;
-
-                    positions.add(new ViewLinkPosition(i, docIndices.get(i), pageNo, x1, y1, x2, y2));
-                    log.info("Found view element {} at page {}: ({}, {}) to ({}, {}) width={} height={}",
-                            elementId, pageNo, x1, y1, x2, y2, x2-x1, y2-y1);
-                } else {
-                    log.warn("Could not find element with id: {}", elementId);
-                }
-            }
-        } catch (Exception e) {
-            log.error("Error extracting view positions from layout tree: {}", e.getMessage(), e);
-        }
-
-        return positions;
-    }
-
-    /**
-     * Calculates View link positions using fixed layout coordinates.
-     * Since we removed "View" text from HTML, we calculate positions based on:
-     * - Fixed X position for the View column (from calibration)
-     * - Y position calculated from row index and fixed row height
-     * - Dynamic table start position from layout tree (for multi-page support)
-     *
-     * Calibration data (from manual TT annotation on first View cell):
-     * - OmniDocs X1 = 675 (center of View column)
-     * - ROW_HEIGHT = 30 (height between rows)
-     * - HEADER_OFFSET = 50 (distance from table header to first data row)
-     *
-     * Multi-page support:
-     * - Table start position is determined from layout tree (supporting-docs-header element)
-     * - Page number is calculated: pageNo = (absoluteY / PAGE_HEIGHT) + 1
-     * - Y is adjusted to be relative to current page
+     * Extracts View link positions from the generated PDF using Aspose.PDF text search.
+     * Searches for document names in the Supporting Documents table, then calculates
+     * the corresponding View column coordinates for OmniDocs annotation placement.
      *
      * @param pdfPath Path to the PDF file
      * @param docIndices List of document indices for each View link
-     * @param docNames List of document names (not used in offset calculation, kept for API compatibility)
+     * @param docNames List of document names to search for in the PDF
      * @return List of ViewLinkPosition objects with calculated coordinates
      */
     private List<ViewLinkPosition> extractViewPositionsFromPdf(
@@ -1794,43 +1590,72 @@ public class NoteSheetService extends BaseIbpsService {
         final int VIEW_WIDTH = 40;         // Width of hyperlink area
         final int VIEW_HEIGHT = 15;        // Height of hyperlink area
         final int Y_ADJUST_OMNI = 24;      // Move overlay down into data row (header + padding)
-        final int HEADER_OFFSET_PTS = 65;  // Skip title + header rows when matching doc names
 
-        log.info("=== Extracting View Positions by searching document names in PDF ===");
+        log.info("=== Extracting View Positions using Aspose.PDF ===");
         log.info("PDF path: {}", pdfPath);
         log.info("Number of documents: {}", docNames.size());
 
-        try (org.apache.pdfbox.pdmodel.PDDocument document =
-                org.apache.pdfbox.pdmodel.PDDocument.load(new java.io.File(pdfPath))) {
+        com.aspose.pdf.Document pdfDoc = null;
+        try {
+            pdfDoc = new com.aspose.pdf.Document(pdfPath);
 
-            // Locate the table header so we don't match the same text above the table
-            findTablePositionWithPDFBox(pdfPath);
-            int minPage = this.tableStartPage;
-            float minY = this.tableStartY + HEADER_OFFSET_PTS;
+            // Find "Supporting Documents" header to establish minimum search boundary
+            int minPage = 1;
+            float minY = 0;
+            com.aspose.pdf.TextFragmentAbsorber headerAbsorber =
+                    new com.aspose.pdf.TextFragmentAbsorber("Supporting Documents");
+            pdfDoc.getPages().accept(headerAbsorber);
+            com.aspose.pdf.TextFragmentCollection headerFragments = headerAbsorber.getTextFragments();
+            if (headerFragments.size() > 0) {
+                // Aspose TextFragmentCollection is 1-based
+                com.aspose.pdf.TextFragment headerFragment = headerFragments.get_Item(1);
+                if (headerFragment == null || headerFragment.getPage() == null) {
+                    log.warn("Supporting Documents header fragment has no page info, skipping boundary check");
+                } else {
+                    minPage = headerFragment.getPage().getNumber();
+                    // Aspose uses bottom-left origin; convert to top-down for comparison
+                    float pageHeight = (float) headerFragment.getPage().getRect().getHeight();
+                    minY = pageHeight - (float) headerFragment.getRectangle().getURY();
+                    log.info("Found 'Supporting Documents' on page {} at Y={} (from top)", minPage, minY);
+                }
+            }
 
-            // Calculate doc-name column bounds from page width and known table layout
-            org.apache.pdfbox.pdmodel.PDPage firstPage = document.getPage(Math.max(0, minPage - 1));
-            float pageWidth = firstPage.getMediaBox().getWidth();
-            float margin = 20f; // CSS body margin
-            float tableWidth = pageWidth - (margin * 2f);
-            float docColX1 = margin + (tableWidth * 0.10f);
-            float docColX2 = margin + (tableWidth * 0.85f);
-
+            // Search for each document name in the PDF
             for (int i = 0; i < docNames.size(); i++) {
                 String docName = docNames.get(i);
                 String docIndex = docIndices.get(i);
 
-                DocumentNameFinder finder = new DocumentNameFinder(docName, minPage, minY, docColX1, docColX2);
-                finder.getText(document);
+                // Use TextSearchOptions to ensure literal text matching (not regex),
+                // so document names with special chars like "Report (Q1).pdf" match correctly
+                com.aspose.pdf.TextFragmentAbsorber absorber =
+                        new com.aspose.pdf.TextFragmentAbsorber(docName);
+                com.aspose.pdf.TextSearchOptions searchOpts = new com.aspose.pdf.TextSearchOptions(false);
+                absorber.setTextSearchOptions(searchOpts);
+                pdfDoc.getPages().accept(absorber);
+                com.aspose.pdf.TextFragmentCollection fragments = absorber.getTextFragments();
 
-                finder.finalizeFound();
+                // Find the first match that's below the Supporting Documents header
+                com.aspose.pdf.TextFragment matchedFragment = null;
+                for (int f = 1; f <= fragments.size(); f++) {
+                    com.aspose.pdf.TextFragment frag = fragments.get_Item(f);
+                    int fragPage = frag.getPage().getNumber();
+                    float fragPageHeight = (float) frag.getPage().getRect().getHeight();
+                    float fragTopDownY = fragPageHeight - (float) frag.getRectangle().getURY();
 
-                if (finder.foundY >= 0 && finder.foundPage > 0) {
-                    int pageNo = finder.foundPage;
-                    org.apache.pdfbox.pdmodel.PDPage page = document.getPage(pageNo - 1);
-                    float pageHeight = page.getMediaBox().getHeight();
+                    boolean isAfterHeader = fragPage > minPage ||
+                            (fragPage == minPage && fragTopDownY > minY);
+                    if (isAfterHeader) {
+                        matchedFragment = frag;
+                        break;
+                    }
+                }
+
+                if (matchedFragment != null) {
+                    int pageNo = matchedFragment.getPage().getNumber();
+                    float pageHeight = (float) matchedFragment.getPage().getRect().getHeight();
+                    float topDownY = pageHeight - (float) matchedFragment.getRectangle().getURY();
                     float omniScale = 1040f / pageHeight;
-                    int y1 = Math.round(finder.foundY * omniScale) + Y_ADJUST_OMNI;
+                    int y1 = Math.round(topDownY * omniScale) + Y_ADJUST_OMNI;
                     int x1 = VIEW_X1;
                     int x2 = x1 + VIEW_WIDTH;
                     int y2 = y1 + VIEW_HEIGHT;
@@ -1846,279 +1671,14 @@ public class NoteSheetService extends BaseIbpsService {
 
         } catch (Exception e) {
             log.error("Error extracting View positions from PDF: {}", e.getMessage(), e);
+        } finally {
+            if (pdfDoc != null) {
+                pdfDoc.close();
+            }
         }
 
         log.info("=== End Position Extraction ({} positions found) ===", positions.size());
         return positions;
-    }
-
-
-    // Instance variables to store table position (set by generatePdfWithPositions)
-    private int tableStartPage = 1;
-    private int tableStartY = 286;  // Default fallback value
-
-    /**
-     * Uses PDFBox to find the "Supporting Documents" text in the generated PDF.
-     * This is more accurate than Flying Saucer's layout tree as it reads the actual PDF.
-     *
-     * @param pdfPath Path to the generated PDF file
-     */
-    private void findTablePositionWithPDFBox(String pdfPath) {
-        final int PAGE_HEIGHT = 842;  // A4 page height in points
-
-        try (org.apache.pdfbox.pdmodel.PDDocument document =
-                org.apache.pdfbox.pdmodel.PDDocument.load(new java.io.File(pdfPath))) {
-
-            int totalPages = document.getNumberOfPages();
-            log.info("PDF has {} total pages, searching for 'Supporting Documents' text...", totalPages);
-
-            // Create a custom text stripper to find text positions
-            for (int pageNum = 1; pageNum <= totalPages; pageNum++) {
-                final int currentPage = pageNum;
-
-                org.apache.pdfbox.text.PDFTextStripperByArea stripper =
-                    new org.apache.pdfbox.text.PDFTextStripperByArea();
-                stripper.setSortByPosition(true);
-
-                org.apache.pdfbox.pdmodel.PDPage page = document.getPage(pageNum - 1);
-                float pageHeight = page.getMediaBox().getHeight();
-
-                // Define a region covering the full page
-                java.awt.Rectangle fullPage = new java.awt.Rectangle(
-                    0, 0,
-                    (int) page.getMediaBox().getWidth(),
-                    (int) pageHeight
-                );
-                stripper.addRegion("fullPage", fullPage);
-                stripper.extractRegions(page);
-
-                String pageText = stripper.getTextForRegion("fullPage");
-
-                if (pageText.contains("Supporting Documents")) {
-                    // Found the text on this page
-                    this.tableStartPage = currentPage;
-
-                    // Use PDFTextStripper with position tracking to find exact Y
-                    TextPositionFinder finder = new TextPositionFinder("Supporting Documents");
-                    finder.setStartPage(pageNum);
-                    finder.setEndPage(pageNum);
-                    finder.getText(document);
-
-                    if (finder.foundY >= 0) {
-                        // PDFBox 2.x: TextPosition.getY() already returns top-down coordinates
-                        // (origin at top-left, Y increases downward) - no inversion needed
-                        this.tableStartY = (int) finder.foundY;
-                        log.info("Found 'Supporting Documents' on page {} at Y={} (from top)",
-                                currentPage, this.tableStartY);
-                    } else {
-                        // Fallback: estimate position based on where text usually appears
-                        this.tableStartY = 100; // Reasonable default for top of content area
-                        log.warn("Could not find exact Y position, using default Y={}", this.tableStartY);
-                    }
-
-                    log.info("=== PDFBox Position Result: page={}, Y={} ===",
-                            this.tableStartPage, this.tableStartY);
-                    return;
-                }
-            }
-
-            // Text not found - use last page as fallback
-            log.warn("'Supporting Documents' text not found in PDF, using last page");
-            this.tableStartPage = totalPages;
-            this.tableStartY = 100;
-
-        } catch (Exception e) {
-            log.error("Error finding table position with PDFBox: {}", e.getMessage(), e);
-            // Use defaults on error
-            this.tableStartPage = 1;
-            this.tableStartY = 286;
-        }
-    }
-
-    /**
-     * Inner class to find text position in PDF using PDFBox.
-     */
-    private static class TextPositionFinder extends org.apache.pdfbox.text.PDFTextStripper {
-        private final String searchText;
-        float foundY = -1;
-
-        TextPositionFinder(String searchText) throws java.io.IOException {
-            this.searchText = searchText;
-            setSortByPosition(true);
-        }
-
-        @Override
-        protected void writeString(String text, java.util.List<org.apache.pdfbox.text.TextPosition> textPositions)
-                throws java.io.IOException {
-            if (foundY < 0 && text.contains(searchText)) {
-                // Get Y position of first character using getYDirAdj() for top-down coordinates
-                // getYDirAdj() returns Y from top of page (origin top-left, Y increases downward)
-                if (!textPositions.isEmpty()) {
-                    foundY = textPositions.get(0).getYDirAdj();
-                }
-            }
-            super.writeString(text, textPositions);
-        }
-    }
-
-    /**
-     * Inner class to find a specific document name in the PDF and get its exact position.
-     * Searches all pages and returns the page number and Y coordinate.
-     */
-    private static class DocumentNameFinder extends org.apache.pdfbox.text.PDFTextStripper {
-        private final String searchText;
-        private final int minPage;
-        private final float minY;
-        private final float minX;
-        private final float maxX;
-        float foundY = -1;
-        int foundPage = -1;
-        float foundX1 = -1;
-        float foundX2 = -1;
-        float firstFoundY = -1;
-        int firstFoundPage = -1;
-        float firstFoundX1 = -1;
-        float firstFoundX2 = -1;
-        private int currentPage = 0;
-
-        DocumentNameFinder(String searchText, int minPage, float minY, float minX, float maxX) throws java.io.IOException {
-            this.searchText = searchText;
-            this.minPage = minPage;
-            this.minY = minY;
-            this.minX = minX;
-            this.maxX = maxX;
-            setSortByPosition(true);
-        }
-
-        @Override
-        protected void startPage(org.apache.pdfbox.pdmodel.PDPage page) throws java.io.IOException {
-            currentPage++;
-            super.startPage(page);
-        }
-
-        @Override
-        protected void writeString(String text, java.util.List<org.apache.pdfbox.text.TextPosition> textPositions)
-                throws java.io.IOException {
-            // Only find first occurrence
-            if (text.contains(searchText) && !textPositions.isEmpty()) {
-                org.apache.pdfbox.text.TextPosition tp = textPositions.get(0);
-                float x = tp.getXDirAdj();
-                float y = tp.getYDirAdj();
-                float minTextX = Float.MAX_VALUE;
-                float maxTextX = -1f;
-                for (org.apache.pdfbox.text.TextPosition pos : textPositions) {
-                    float px = pos.getXDirAdj();
-                    float pw = pos.getWidthDirAdj();
-                    minTextX = Math.min(minTextX, px);
-                    maxTextX = Math.max(maxTextX, px + pw);
-                }
-
-                if (firstFoundY < 0) {
-                    firstFoundY = y;
-                    firstFoundPage = currentPage;
-                    firstFoundX1 = minTextX;
-                    firstFoundX2 = maxTextX;
-                }
-
-                boolean pageOk = currentPage > minPage || (currentPage == minPage && y >= minY);
-                boolean xOk = x >= minX && x <= maxX;
-
-                if (foundY < 0 && pageOk && xOk) {
-                    // Use getYDirAdj() for top-down coordinates (origin at top-left)
-                    foundY = y;
-                    foundPage = currentPage;
-                    foundX1 = minTextX;
-                    foundX2 = maxTextX;
-                }
-            }
-            super.writeString(text, textPositions);
-        }
-
-        void finalizeFound() {
-            if (foundY < 0 && firstFoundY >= 0) {
-                foundY = firstFoundY;
-                foundPage = firstFoundPage;
-                foundX1 = firstFoundX1;
-                foundX2 = firstFoundX2;
-            }
-        }
-    }
-
-    /**
-     * Inner class to find all "View" text positions in the PDF.
-     * Scans all pages and collects exact X,Y coordinates for each "View" text.
-     */
-    private static class ViewTextFinder extends org.apache.pdfbox.text.PDFTextStripper {
-        private final java.util.List<ViewPosition> viewPositions = new java.util.ArrayList<>();
-        private int currentPage = 0;
-
-        ViewTextFinder() throws java.io.IOException {
-            setSortByPosition(true);
-        }
-
-        @Override
-        protected void startPage(org.apache.pdfbox.pdmodel.PDPage page) throws java.io.IOException {
-            currentPage++;
-            super.startPage(page);
-        }
-
-        @Override
-        protected void writeString(String text, java.util.List<org.apache.pdfbox.text.TextPosition> textPositions)
-                throws java.io.IOException {
-            // Look for standalone "View" text (the hyperlink text in the table)
-            if (text.trim().equals("View") && !textPositions.isEmpty()) {
-                org.apache.pdfbox.text.TextPosition tp = textPositions.get(0);
-                // Use getYDirAdj() for top-down Y coordinate (origin at top-left)
-                float x = tp.getXDirAdj();
-                float y = tp.getYDirAdj();
-                viewPositions.add(new ViewPosition(currentPage, x, y));
-            }
-            super.writeString(text, textPositions);
-        }
-
-        java.util.List<ViewPosition> getViewPositions() {
-            return viewPositions;
-        }
-
-        static class ViewPosition {
-            final int pageNo;
-            final float x;
-            final float y;
-
-            ViewPosition(int pageNo, float x, float y) {
-                this.pageNo = pageNo;
-                this.x = x;
-                this.y = y;
-            }
-        }
-    }
-
-    /**
-     * Recursively searches for a box with the given element ID in the layout tree.
-     * (Kept for potential future use)
-     */
-    @SuppressWarnings("unused")
-    private org.xhtmlrenderer.render.Box findBoxById(org.xhtmlrenderer.render.Box box, String id) {
-        if (box == null) {
-            return null;
-        }
-
-        // Check if this box has the target ID
-        org.w3c.dom.Element element = box.getElement();
-        if (element != null && id.equals(element.getAttribute("id"))) {
-            return box;
-        }
-
-        // Recursively search children
-        for (int i = 0; i < box.getChildCount(); i++) {
-            org.xhtmlrenderer.render.Box child = box.getChild(i);
-            org.xhtmlrenderer.render.Box found = findBoxById(child, id);
-            if (found != null) {
-                return found;
-            }
-        }
-
-        return null;
     }
 
     /**
@@ -2341,6 +1901,168 @@ public class NoteSheetService extends BaseIbpsService {
             this.pdfPath = pdfPath;
             this.viewPositions = viewPositions;
         }
+    }
+
+    /**
+     * Sanitizes HTML content from Froala editor (which may contain Word-pasted tables)
+     * to ensure tables fit within the PDF page width without horizontal truncation.
+     *
+     * Word/Froala generates HTML with absolute pixel widths on tables and cells
+     * (e.g., style="width: 950px"). These exceed the PDF page width (~555pt usable)
+     * and cause horizontal clipping. This method:
+     *
+     * 1. Replaces absolute pixel widths on <table> tags with width:100%
+     * 2. Removes absolute pixel widths on <td>/<th>/<col> tags (lets auto-layout size them)
+     * 3. Strips Word-specific mso-* CSS properties
+     * 4. Removes explicit width/height on images that exceed page width
+     */
+    private String sanitizeHtmlForPdf(String html) {
+        if (html == null || html.isEmpty()) return html;
+
+        // ===== TABLE WIDTH FIXES =====
+
+        // 1a. Replace absolute pixel/pt/cm/in widths on <table> style with 100%
+        //     Covers: width:950px, width: 950.5pt, width:25cm, width:8in
+        //     Case-insensitive for tags since Froala/Word may output <TABLE>
+        html = html.replaceAll(
+                "(?i)(<table[^>]*style\\s*=\\s*[\"'][^\"']*)width\\s*:\\s*[0-9]+\\.?[0-9]*(px|pt|cm|in|mm)",
+                "$1width: 100%");
+
+        // 1b. Handle width as an HTML attribute: <table width="950"> or <table width="950px">
+        html = html.replaceAll(
+                "(?i)(<table[^>]*)\\s+width\\s*=\\s*[\"'][0-9]+(px)?[\"']",
+                "$1 width=\"100%\"");
+
+        // 1c. Handle single-quoted style attributes: <table style='width: 950px'>
+        //     (Froala sometimes outputs single quotes)
+        html = html.replaceAll(
+                "(?i)(<table[^>]*style\\s*=\\s*'[^']*)width\\s*:\\s*[0-9]+\\.?[0-9]*(px|pt|cm|in|mm)",
+                "$1width: 100%");
+
+        // ===== CELL WIDTH FIXES =====
+
+        // 2a. Remove absolute widths on <td>, <th> style (px, pt, cm, in, mm)
+        //     This lets table-layout:auto distribute columns based on content
+        html = html.replaceAll(
+                "(?i)(<t[dh][^>]*style\\s*=\\s*[\"'][^\"']*)width\\s*:\\s*[0-9]+\\.?[0-9]*(px|pt|cm|in|mm)\\s*;?",
+                "$1");
+
+        // 2b. Remove absolute widths on <col>/<colgroup> style
+        html = html.replaceAll(
+                "(?i)(<col[^>]*style\\s*=\\s*[\"'][^\"']*)width\\s*:\\s*[0-9]+\\.?[0-9]*(px|pt|cm|in|mm)\\s*;?",
+                "$1");
+
+        // 2c. Remove width HTML attribute on <td>/<th>/<col>: <td width="250">
+        html = html.replaceAll(
+                "(?i)(<t[dh][^>]*)\\s+width\\s*=\\s*[\"'][0-9]+(px)?[\"']",
+                "$1");
+        html = html.replaceAll(
+                "(?i)(<col[^>]*)\\s+width\\s*=\\s*[\"'][0-9]+(px)?[\"']",
+                "$1");
+
+        // ===== WORD-SPECIFIC CLEANUP =====
+
+        // 3a. Remove Word mso-* CSS properties (mso-table-lspace, mso-border-alt, etc.)
+        //     These are not valid CSS and can confuse PDF renderers
+        html = html.replaceAll("mso-[a-zA-Z\\-]+\\s*:[^;\"']+;?", "");
+
+        // 3b. Remove Word conditional comments: <!--[if gte mso 9]>...<![endif]-->
+        html = html.replaceAll("(?s)<!--\\[if[^]]*\\]>.*?<!\\[endif\\]-->", "");
+
+        // 3c. Remove Word XML namespace tags: <o:p>, </o:p>, <w:sdt>, <v:shape>, <m:oMath>, etc.
+        //     Only targets known Word namespace prefixes to avoid stripping valid SVG/XLink tags.
+        html = html.replaceAll("(?i)</?(?:o|w|v|m|st\\d*):[a-z]+[^>]*>", "");
+
+        // 3d. Remove class="Mso*" Word style classes (MsoNormal, MsoTableGrid, etc.)
+        //     These reference undefined CSS classes that can cause layout issues
+        html = html.replaceAll("(?i)\\s*class\\s*=\\s*[\"']Mso[^\"']*[\"']", "");
+
+        // ===== IMAGE OVERFLOW FIXES =====
+
+        // 4a. Cap image style widths to max-width:100% (px, pt, cm, in)
+        html = html.replaceAll(
+                "(?i)(<img[^>]*style\\s*=\\s*[\"'][^\"']*)width\\s*:\\s*[0-9]+\\.?[0-9]*(px|pt|cm|in|mm)",
+                "$1max-width: 100%; width: auto");
+
+        // 4b. Remove width/height HTML attributes on <img> (Word sets these in pixels)
+        //     Keep aspect ratio by removing both; CSS max-width:100% handles sizing
+        html = html.replaceAll(
+                "(?i)(<img[^>]*)\\s+width\\s*=\\s*[\"'][0-9]+[\"']",
+                "$1");
+        html = html.replaceAll(
+                "(?i)(<img[^>]*)\\s+height\\s*=\\s*[\"'][0-9]+[\"']",
+                "$1");
+
+        // ===== ABSOLUTE POSITION / MIN-WIDTH FIXES =====
+
+        // 5a. Remove min-width with absolute values on any element (can force overflow)
+        html = html.replaceAll(
+                "(?i)min-width\\s*:\\s*[0-9]+\\.?[0-9]*(px|pt|cm|in|mm)\\s*;?", "");
+
+        // 5b. Remove position:absolute from table elements (Word sometimes adds this)
+        html = html.replaceAll(
+                "(?i)(<t(?:able|[dhr]|head|body|foot)[^>]*style\\s*=\\s*[\"'][^\"']*)position\\s*:\\s*absolute\\s*;?",
+                "$1");
+
+        // ===== TEXT-INDENT & NEGATIVE MARGIN FIXES =====
+
+        // 5c. Remove text-indent values > 40px (Word uses these for alignment, e.g. text-indent:768px)
+        //     These push content beyond the page width causing left-side truncation.
+        //     Preserves small indents (0-40px) that may be intentional paragraph indentation.
+        {
+            java.util.regex.Matcher tiMatcher = java.util.regex.Pattern.compile(
+                    "(?i)text-indent\\s*:\\s*([0-9]+)\\.?[0-9]*(px|pt|cm|in|mm)\\s*;?").matcher(html);
+            StringBuilder sb = new StringBuilder();
+            while (tiMatcher.find()) {
+                int val = Integer.parseInt(tiMatcher.group(1));
+                tiMatcher.appendReplacement(sb, val > 40 ? "" : java.util.regex.Matcher.quoteReplacement(tiMatcher.group(0)));
+            }
+            tiMatcher.appendTail(sb);
+            html = sb.toString();
+        }
+
+        // 5d. Remove individual negative margin-left/margin-right that push content off-page
+        html = html.replaceAll("(?i)margin-left\\s*:\\s*-[0-9]+\\.?[0-9]*(px|pt|cm|in|mm)\\s*;?", "");
+        html = html.replaceAll("(?i)margin-right\\s*:\\s*-[0-9]+\\.?[0-9]*(px|pt|cm|in|mm)\\s*;?", "");
+
+        // 5e. For shorthand margin with negative values, zero out the negative sides
+        //     e.g. "margin: 0px -51px 10.6667px -48px" → "margin: 0px 0px 10.6667px 0px"
+        {
+            java.util.regex.Matcher mMatcher = java.util.regex.Pattern.compile(
+                    "(?i)(margin\\s*:\\s*)([^;\"']+)(;?)").matcher(html);
+            StringBuilder sb = new StringBuilder();
+            while (mMatcher.find()) {
+                String value = mMatcher.group(2);
+                if (value.contains("-")) {
+                    // Replace negative values with 0px
+                    value = value.replaceAll("-[0-9]+\\.?[0-9]*(px|pt|cm|in|mm)", "0px");
+                    mMatcher.appendReplacement(sb, java.util.regex.Matcher.quoteReplacement(
+                            mMatcher.group(1) + value + mMatcher.group(3)));
+                } else {
+                    mMatcher.appendReplacement(sb, java.util.regex.Matcher.quoteReplacement(mMatcher.group(0)));
+                }
+            }
+            mMatcher.appendTail(sb);
+            html = sb.toString();
+        }
+
+        // ===== NON-BREAKING SPACE OVERFLOW FIXES =====
+
+        // 6a. Collapse runs of 3+ &nbsp; (possibly separated by regular spaces) into a single space.
+        //     Word-pasted content uses &nbsp; chains for alignment (e.g., 72 consecutive &nbsp;
+        //     before "Criteria notified"). These create unbreakable lines wider than the page.
+        html = html.replaceAll("(?:&nbsp;\\s*){3,}", " ");
+
+        // 6b. Replace remaining pairs of &nbsp; with a regular space + &nbsp;
+        //     This preserves minimal spacing but allows line breaks between them.
+        html = html.replaceAll("&nbsp;\\s*&nbsp;", " &nbsp;");
+
+        // ===== CLEANUP =====
+
+        // 7. Remove empty style attributes left after cleanup: style="" or style=''
+        html = html.replaceAll("(?i)style\\s*=\\s*[\"']\\s*[\"']", "");
+
+        return html;
     }
 
     /**

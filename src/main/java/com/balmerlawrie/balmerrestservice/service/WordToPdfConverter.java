@@ -3,9 +3,8 @@ package com.balmerlawrie.balmerrestservice.service;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 
-import org.docx4j.openpackaging.exceptions.Docx4JException;
-import org.docx4j.openpackaging.packages.WordprocessingMLPackage;
-import org.docx4j.Docx4J;
+import com.aspose.words.Document;
+import com.aspose.words.SaveFormat;
 
 public class WordToPdfConverter {
 
@@ -14,14 +13,10 @@ public class WordToPdfConverter {
                 ByteArrayInputStream wordInputStream = new ByteArrayInputStream(wordBytes);
                 ByteArrayOutputStream pdfOutputStream = new ByteArrayOutputStream()
         ) {
-            // Load DOCX into WordprocessingMLPackage
-            WordprocessingMLPackage wordMLPackage = WordprocessingMLPackage.load(wordInputStream);
-
-            // Convert DOCX → PDF (new recommended API)
-            Docx4J.toPDF(wordMLPackage, pdfOutputStream);
-
+            Document doc = new Document(wordInputStream);
+            doc.save(pdfOutputStream, SaveFormat.PDF);
             return pdfOutputStream.toByteArray();
-        } catch (Docx4JException e) {
+        } catch (Exception e) {
             throw new RuntimeException("Error converting Word to PDF: " + e.getMessage(), e);
         }
     }

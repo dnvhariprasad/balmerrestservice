@@ -420,7 +420,8 @@ Header: sessionId</pre
               <td class="io-cell">
                 <pre>
 Query: workitemId, processInstanceId
-(Uses service account)</pre
+Header: sessionId (optional)
+(Falls back to service account if not provided)</pre
                 >
               </td>
               <td class="io-cell">
@@ -432,7 +433,8 @@ Query: workitemId, processInstanceId
   "newVersion": "1.5",
   "pdfPath": "/tmp/...",
   "commentsPath": "/tmp/...",
-  "annotationsPreserved": true
+  "annotationsPreserved": true,
+  "viewHyperlinksAdded": 0
 }</pre
                 >
               </td>
