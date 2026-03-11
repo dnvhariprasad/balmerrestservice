@@ -1772,9 +1772,9 @@ public class NoteSheetService extends BaseIbpsService {
             if (is == null) {
                 log.warn("Template not found: {}, using default", templatePath);
                 if (templatePath.contains("document_list_template")) {
-                    return "<div style=\"margin-top:20px;\"><table border=\"1\" style=\"width:100%;\"><tr><td colspan=\"3\" style=\"background:#e0e0e0;\"><b>Supporting Documents</b></td></tr><tr style=\"background:#f0f0f0;font-weight:bold;\"><td style=\"width:5%;text-align:center;\">S.No</td><td style=\"width:70%;\">Document Name</td><td style=\"width:25%;\">Document Index</td></tr>{{DOCUMENT_ROWS}}</table></div>";
+                    return "<div style=\"margin-top:20px;\"><table border=\"1\" style=\"width:100%;\"><tr><td colspan=\"2\" style=\"background:#e0e0e0;\"><b>Supporting Documents</b></td></tr><tr style=\"background:#f0f0f0;font-weight:bold;\"><td style=\"width:8%;text-align:center;\">S.No</td><td style=\"width:92%;\">Document Name</td></tr>{{DOCUMENT_ROWS}}</table></div>";
                 } else if (templatePath.contains("document_row_template")) {
-                    return "<tr><td style=\"text-align:center;\">{{SNO}}</td><td>{{DOCUMENT_NAME}}</td><td>{{DOCUMENT_INDEX}}</td></tr>";
+                    return "<tr><td style=\"text-align:center;\">{{SNO}}</td><td>{{DOCUMENT_NAME}}</td></tr>";
                 } else if (templatePath.contains("comment_template")) {
                     return "<div style=\"margin-top:20px;\"><table border=\"1\" style=\"width:100%;\"><tr><td colspan=\"3\" style=\"background:#e0e0e0;\"><b>Notesheet Comments</b></td></tr>{{COMMENTS_ROWS}}</table></div>";
                 } else {
@@ -1811,7 +1811,7 @@ public class NoteSheetService extends BaseIbpsService {
 
     /**
      * Renders document rows using the row template.
-     * Format: S.NO. | Document Name (hyperlinked) | View
+     * Format: S.NO. | Document Name (hyperlinked)
      * Skips documents whose name starts with "notesheet" (case-insensitive).
      *
      * @param documents JSON array of documents
