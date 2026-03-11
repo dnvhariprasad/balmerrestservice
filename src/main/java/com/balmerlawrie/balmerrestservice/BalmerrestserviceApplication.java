@@ -10,7 +10,10 @@ import org.springframework.context.annotation.ComponentScan;
 public class BalmerrestserviceApplication  extends CommandRunnerImpl{
 
 	public static void main(String[] args) {
-		SpringApplication.run(BalmerrestserviceApplication.class, args);
+		System.setProperty("java.awt.headless", "false");
+		SpringApplication app = new SpringApplication(BalmerrestserviceApplication.class);
+		app.setHeadless(false);
+		app.run(args);
 	}
 
 }

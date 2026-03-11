@@ -1189,8 +1189,10 @@ Header: sessionId: 12345</pre
           </div>
           <p class="endpoint-description">
             Creates a PDF from original notesheet + supporting documents list + comments and updates the
-            notesheet document. The PDF includes a table of supporting documents (S.NO., Document Name, Document Index)
-            followed by the comments history table.
+            notesheet document. The PDF includes a table of supporting documents (S.No, Document Name, View)
+            followed by the comments history table. Documents whose name starts with "notesheet" are skipped.
+            For legal processes, an extra HTML section (case details) can be inserted before the supporting documents table
+            via the <code>createPdfNoteWithExtraSection()</code> variant.
           </p>
           <div class="flow-diagram">
             <h4>Sequence Diagram</h4>
@@ -1230,7 +1232,7 @@ sequenceDiagram
     O-->>SD: Documents List
     SD-->>S: Documents JSON
 
-    S->>S: generatePdfWithComments(docs, comments)
+    S->>S: generatePdfWithPositions(html, docs, comments)
     Note right of S: Renders Documents Table + Comments Table
 
     S->>DO: checkoutCheckinWithAnnotations()
@@ -1260,23 +1262,14 @@ sequenceDiagram
                 <span class="param-required">Required</span>
               </div>
               <div class="param">
-                <span class="param-name">userName</span>
-                <span class="param-type">Query</span>
-                <span class="param-required">Optional*</span>
-              </div>
-              <div class="param">
-                <span class="param-name">password</span>
-                <span class="param-type">Query</span>
-                <span class="param-required">Optional*</span>
-              </div>
-              <div class="param">
                 <span class="param-name">sessionId</span>
                 <span class="param-type">Header</span>
-                <span class="param-required">Optional*</span>
+                <span class="param-required">Optional</span>
               </div>
             </div>
             <p style="font-size: 0.8rem; color: #64748b; margin-top: 8px">
-              * Provide either sessionId OR userName+password
+              If sessionId is not provided (or is 0), the service account is used automatically.
+              If the service account session expires, it is invalidated and retried once.
             </p>
           </div>
           <div class="io-section">
@@ -1286,8 +1279,8 @@ sequenceDiagram
 POST /notesheet/createpdfnote
   ?workitemId=1
   &amp;processInstanceId=e-Notes-000000000008-process
-  &amp;userName=supervisor
-  &amp;password=Password123</pre
+
+(Optional) Header: sessionId: 123456789</pre
               >
             </div>
             <div class="io-block">
@@ -1300,7 +1293,8 @@ POST /notesheet/createpdfnote
   "newVersion": "1.5",
   "pdfPath": "/tmp/notesheets/newNoteContent-uuid.pdf",
   "commentsPath": "/tmp/comments/comments-uuid.json",
-  "annotationsPreserved": true
+  "annotationsPreserved": true,
+  "viewHyperlinksAdded": 0
 }</pre
               >
             </div>
