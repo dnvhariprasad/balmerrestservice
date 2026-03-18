@@ -1,6 +1,7 @@
 package com.balmerlawrie.balmerrestservice.config;
 
 import org.springframework.boot.web.client.RestTemplateBuilder;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.client.RestTemplate;
@@ -14,6 +15,12 @@ import java.time.Duration;
 @Configuration
 public class RestConfig {
 
+    @Value("${http.client.connect-timeout-seconds:10}")
+    private long connectTimeoutSeconds;
+
+    @Value("${http.client.read-timeout-seconds:120}")
+    private long readTimeoutSeconds;
+
     /**
      * Creates a RestTemplate bean with connection and read timeouts.
      * This should be injected into services instead of creating new instances.
@@ -24,8 +31,8 @@ public class RestConfig {
     @Bean
     public RestTemplate restTemplate(RestTemplateBuilder builder) {
         return builder
-                .setConnectTimeout(Duration.ofSeconds(10))
-                .setReadTimeout(Duration.ofSeconds(30))
+                .setConnectTimeout(Duration.ofSeconds(connectTimeoutSeconds))
+                .setReadTimeout(Duration.ofSeconds(readTimeoutSeconds))
                 .build();
     }
 }
