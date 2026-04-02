@@ -75,7 +75,7 @@ public class NoteSheetService extends BaseIbpsService {
             // Step 1: Get work item attributes
             JsonNode attributes = fetchWorkItemAttributes(processInstanceId, workitemId, sessionId);
             if (attributes == null || attributes.has("error")) {
-                return createNotFoundResponse("Failed to fetch work item attributes");
+                return createNotFoundResponse(buildFetchAttributesFailureMessage(attributes));
             }
 
             // Step 2: Extract notesheet_original attribute (format:
@@ -146,7 +146,7 @@ public class NoteSheetService extends BaseIbpsService {
             // Step 1: Get work item attributes
             JsonNode attributes = fetchWorkItemAttributes(processInstanceId, workitemId, sessionId);
             if (attributes == null || attributes.has("error")) {
-                return createNotFoundResponse("Failed to fetch work item attributes");
+                return createNotFoundResponse(buildFetchAttributesFailureMessage(attributes));
             }
 
             // Step 2: Extract 'notesheet' attribute (format: FolderIndex#DocumentIndex)
@@ -869,6 +869,39 @@ public class NoteSheetService extends BaseIbpsService {
             log.debug("WMFetchWorkItemAttributes response OK");
             return result;
 
+        } catch (org.springframework.web.client.HttpClientErrorException e) {
+            String responseBody = e.getResponseBodyAsString();
+            log.warn("iBPS returned HTTP {}, parsing error body: {}",
+                    e.getStatusCode(), responseBody.substring(0, Math.min(300, responseBody.length())));
+            try {
+                JsonNode errorJson;
+
+                if (responseBody.trim().startsWith("[")) {
+                    errorJson = jsonMapper.readTree(responseBody).get(0);
+                } else if (responseBody.trim().startsWith("{")) {
+                    errorJson = jsonMapper.readTree(responseBody);
+                } else {
+                    errorJson = parseXmlToJson(responseBody);
+                }
+
+                JsonNode output = errorJson.path("WMFetchWorkItemAttributes_Output");
+                if (output.isMissingNode()) {
+                    output = errorJson;
+                }
+
+                int status = output.path("Status").asInt(-1);
+                JsonNode errorNode = output.path("Error").path("Exception");
+                String errorDesc = errorNode.path("Description").asText("");
+                if (errorDesc.isEmpty()) {
+                    errorDesc = errorNode.path("Subject").asText("Unknown iBPS error");
+                }
+
+                log.error("iBPS API error: Status={}, Description={}", status, errorDesc);
+                return createErrorResponse("iBPS error (Status " + status + "): " + errorDesc);
+            } catch (Exception parseEx) {
+                log.error("Failed to parse iBPS error response: {}", parseEx.getMessage());
+                return createErrorResponse("Error fetching work item: " + e.getStatusCode());
+            }
         } catch (org.springframework.web.client.HttpServerErrorException e) {
             // iBPS returns HTTP 500 with JSON or XML error body - parse it
             String responseBody = e.getResponseBodyAsString();
@@ -913,6 +946,34 @@ public class NoteSheetService extends BaseIbpsService {
             log.error("Error fetching work item attributes: {}", e.getMessage(), e);
             return createErrorResponse("Error fetching attributes", e.getMessage());
         }
+    }
+
+    /**
+     * Builds an actionable failure message from fetchWorkItemAttributes response.
+     */
+    private String buildFetchAttributesFailureMessage(JsonNode attributes) {
+        String base = "Failed to fetch work item attributes";
+        if (attributes == null) {
+            return base;
+        }
+
+        String error = attributes.path("error").asText("");
+        String details = attributes.path("details").asText("");
+        StringBuilder sb = new StringBuilder(base);
+
+        if (!error.isEmpty()) {
+            sb.append(": ").append(error);
+        }
+        if (!details.isEmpty()) {
+            if (!error.isEmpty()) {
+                sb.append(" - ");
+            } else {
+                sb.append(": ");
+            }
+            sb.append(details);
+        }
+
+        return sb.toString();
     }
 
     /**
