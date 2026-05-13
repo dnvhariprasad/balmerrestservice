@@ -19,6 +19,10 @@ import java.io.FileOutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -65,7 +69,7 @@ public class DocumentOpsService extends BaseIbpsService {
      * @return JSON result with status
      */
     public JsonNode checkoutCheckinWithAnnotations(String documentIndex, String contentPath, long sessionId) {
-        return checkoutCheckinWithAnnotations(documentIndex, contentPath, sessionId, false);
+        return checkoutCheckinWithAnnotations(documentIndex, contentPath, sessionId, false, null);
     }
 
     /**
@@ -80,6 +84,26 @@ public class DocumentOpsService extends BaseIbpsService {
      */
     public JsonNode checkoutCheckinWithAnnotations(String documentIndex, String contentPath, long sessionId,
             boolean filterViewHyperlinks) {
+        return checkoutCheckinWithAnnotations(documentIndex, contentPath, sessionId, filterViewHyperlinks, null);
+    }
+
+    /**
+     * Performs checkout, checkin with new content, and restores annotations.
+     * Optionally filters out View hyperlink annotations and merges annotations from a
+     * source document (for example notesheet_original).
+     *
+     * @param documentIndex                Document to update
+     * @param contentPath                  Path to the new content file
+     * @param sessionId                    Session ID for authentication
+     * @param filterViewHyperlinks         If true, removes existing View hyperlink
+     *                                     annotations before restore
+     * @param mergeFromSourceDocumentIndex Optional source document index whose
+     *                                     annotations should be merged into target
+     *                                     before restore
+     * @return JSON result with status
+     */
+    public JsonNode checkoutCheckinWithAnnotations(String documentIndex, String contentPath, long sessionId,
+            boolean filterViewHyperlinks, String mergeFromSourceDocumentIndex) {
         log.info("Starting checkoutCheckinWithAnnotations for documentIndex: {}, filterViewHyperlinks: {}",
                 documentIndex, filterViewHyperlinks);
 
@@ -99,11 +123,13 @@ public class DocumentOpsService extends BaseIbpsService {
                     annotationBackupPath = saveAnnotationsToTemp(documentIndex, annotations);
                     log.info("Annotations backed up to: {}", annotationBackupPath);
 
-                    // Filter out View hyperlink annotations if requested
-                    filteredAnnotations = filterViewHyperlinks
+                    // Filter out View hyperlink annotations from target if requested
+                    JsonNode targetAnnotations = filterViewHyperlinks
                             ? filterViewHyperlinkAnnotations(annotations)
                             : annotations;
                     log.info("Filtered View hyperlink annotations from backup");
+
+                    filteredAnnotations = targetAnnotations;
                 } else {
                     log.info("No annotations found to backup.");
                 }
@@ -115,6 +141,36 @@ public class DocumentOpsService extends BaseIbpsService {
                 errorResult.put("error", "Cannot proceed with checkin: annotation backup failed. " +
                         "Aborting to prevent annotation loss. Cause: " + annotEx.getMessage());
                 return errorResult;
+            }
+
+            // Merge annotations from source document (e.g., notesheet_original) if
+            // requested.
+            if (mergeFromSourceDocumentIndex != null
+                    && !mergeFromSourceDocumentIndex.isBlank()
+                    && !mergeFromSourceDocumentIndex.equals(documentIndex)) {
+                try {
+                    JsonNode sourceResult = noteSheetService.getAnnotations(mergeFromSourceDocumentIndex, sessionId);
+                    if (sourceResult.path("success").asBoolean(false)) {
+                        JsonNode sourceAnnotations = sourceResult.path("annotations");
+                        if (!sourceAnnotations.isMissingNode() && sourceAnnotations.size() > 0) {
+                            filteredAnnotations = mergeAnnotationSets(filteredAnnotations, sourceAnnotations,
+                                    "orig_" + mergeFromSourceDocumentIndex + "_");
+                            hasAnnotations = filteredAnnotations != null
+                                    && !filteredAnnotations.isMissingNode()
+                                    && filteredAnnotations.size() > 0;
+                            log.info("Merged annotations from source document {} into target {}",
+                                    mergeFromSourceDocumentIndex, documentIndex);
+                        } else {
+                            log.info("No annotations found in source document {}", mergeFromSourceDocumentIndex);
+                        }
+                    } else {
+                        log.warn("Could not fetch annotations from source document {}. Continuing without merge.",
+                                mergeFromSourceDocumentIndex);
+                    }
+                } catch (Exception sourceEx) {
+                    log.warn("Failed merging annotations from source document {}: {}",
+                            mergeFromSourceDocumentIndex, sourceEx.getMessage());
+                }
             }
 
             // Step 2: Force undo checkout (in case already checked out)
@@ -161,6 +217,8 @@ public class DocumentOpsService extends BaseIbpsService {
             result.put("annotationsBackedUp", hasAnnotations);
             result.put("annotationsRestored", restoreResult != null);
             result.put("viewHyperlinksFiltered", filterViewHyperlinks);
+            result.put("mergedFromSourceDocument",
+                    mergeFromSourceDocumentIndex != null && !mergeFromSourceDocumentIndex.isBlank());
             if (annotationBackupPath != null) {
                 result.put("annotationBackupPath", annotationBackupPath);
             }
@@ -174,6 +232,105 @@ public class DocumentOpsService extends BaseIbpsService {
             errorResult.put("error", e.getMessage());
             return errorResult;
         }
+    }
+
+    private JsonNode mergeAnnotationSets(JsonNode targetAnnotations, JsonNode sourceAnnotations,
+            String sourceGroupPrefix) {
+        List<JsonNode> targetGroups = extractAnnotationGroups(targetAnnotations);
+        List<JsonNode> sourceGroups = extractAnnotationGroups(sourceAnnotations);
+        if (targetGroups.isEmpty() && sourceGroups.isEmpty()) {
+            return jsonMapper.createObjectNode();
+        }
+
+        ObjectNode merged = jsonMapper.createObjectNode();
+        com.fasterxml.jackson.databind.node.ArrayNode mergedGroups = jsonMapper.createArrayNode();
+        Set<String> seenKeys = new HashSet<>();
+        Set<String> usedGroupNames = new HashSet<>();
+
+        for (JsonNode group : targetGroups) {
+            if (!group.isObject()) {
+                continue;
+            }
+            String key = buildGroupKey(group);
+            if (seenKeys.add(key)) {
+                mergedGroups.add(group);
+                usedGroupNames.add(group.path("AnnotGroupName").asText(""));
+            }
+        }
+
+        for (JsonNode group : sourceGroups) {
+            if (!group.isObject()) {
+                continue;
+            }
+
+            String key = buildGroupKey(group);
+            if (!seenKeys.add(key)) {
+                continue;
+            }
+
+            ObjectNode cloned = ((ObjectNode) group).deepCopy();
+            String originalName = cloned.path("AnnotGroupName").asText("");
+            String finalName = originalName;
+            if (finalName.isBlank()) {
+                finalName = "orig_group";
+            }
+
+            // Avoid name collisions that can cause NGOAddAnnotation duplicate-group skips.
+            if (usedGroupNames.contains(finalName)) {
+                finalName = sourceGroupPrefix + finalName;
+            }
+            int suffix = 1;
+            String candidate = finalName;
+            while (usedGroupNames.contains(candidate)) {
+                candidate = finalName + "_" + suffix++;
+            }
+            finalName = candidate;
+
+            cloned.put("AnnotGroupName", finalName);
+            usedGroupNames.add(finalName);
+            mergedGroups.add(cloned);
+        }
+
+        if (mergedGroups.size() == 1) {
+            merged.set("AnnotationGroup", mergedGroups.get(0));
+        } else {
+            merged.set("AnnotationGroup", mergedGroups);
+        }
+        return merged;
+    }
+
+    private List<JsonNode> extractAnnotationGroups(JsonNode annotations) {
+        List<JsonNode> list = new ArrayList<>();
+        if (annotations == null || annotations.isMissingNode() || annotations.isNull() || annotations.isEmpty()) {
+            return list;
+        }
+
+        JsonNode groupsNode = annotations.path("AnnotationGroup");
+        if (groupsNode.isMissingNode()) {
+            if (annotations.isArray() || annotations.has("AnnotGroupName")) {
+                groupsNode = annotations;
+            } else {
+                return list;
+            }
+        }
+
+        if (groupsNode.isArray()) {
+            for (JsonNode g : groupsNode) {
+                list.add(g);
+            }
+        } else {
+            list.add(groupsNode);
+        }
+        return list;
+    }
+
+    private String buildGroupKey(JsonNode group) {
+        String name = group.path("AnnotGroupName").asText("");
+        String pageNo = group.path("PageNo").asText("");
+        String type = group.path("AnnotationType").asText("");
+        String accessType = group.path("AccessType").asText("");
+        String buffer = group.path("AnnotationBuffer").asText("");
+        return name + "|" + pageNo + "|" + type + "|" + accessType + "|" + Integer.toHexString(buffer.hashCode());
     }
 
     /**

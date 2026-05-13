@@ -1543,7 +1543,7 @@ public class NoteSheetService extends BaseIbpsService {
             stepStartNanos = System.nanoTime();
             log.info("Step 6: Updating notesheet with new PDF...");
             JsonNode updateResult = documentOpsService.checkoutCheckinWithAnnotations(
-                    notedocumentIndex, pdfPath, sessionId, true);
+                    notedocumentIndex, pdfPath, sessionId, true, originalDocIndex);
 
             if (!updateResult.path("success").asBoolean(false)) {
                 return createErrorResponse("Failed to update notesheet",
@@ -1716,8 +1716,9 @@ public class NoteSheetService extends BaseIbpsService {
                 "<head>\n" +
                 "  <style>\n" +
                 "    body { font-family: Arial, sans-serif; font-size: 12px; margin: 0; padding: 0; }\n" +
-                "    table { border-collapse: collapse; width: 100%; table-layout: auto; }\n" +
-                "    td, th { border: 1px solid #333; padding: 8px; overflow-wrap: break-word; word-wrap: break-word; }\n" +
+                "    table { border-collapse: collapse; width: 100% !important; max-width: 100% !important; table-layout: fixed !important; }\n" +
+                "    td, th { border: 1px solid #333; padding: 4px; width: auto !important; white-space: normal !important; overflow-wrap: break-word !important; word-break: normal !important; }\n" +
+                "    p, li, span, strong { overflow-wrap: break-word; word-break: normal; }\n" +
                 "  </style>\n" +
                 "</head>\n" +
                 "<body>\n" +
@@ -2161,6 +2162,23 @@ public class NoteSheetService extends BaseIbpsService {
                 "(?i)(<col[^>]*)\\s+width\\s*=\\s*[\"'][0-9]+(px)?[\"']",
                 "$1");
 
+        // 2d. Dynamic Word/Froala content can contain percentage or non-numeric widths
+        //     (width:52%, width:auto, <table width="100%">, etc.). Strip those too so
+        //     the PDF wrapper CSS owns table sizing. The negative lookbehind prevents
+        //     accidentally matching border-width.
+        html = html.replaceAll("(?i)(?<!-)\\bwidth\\s*:\\s*[^;\"']+;?", "");
+        html = html.replaceAll("(?i)\\bmin-width\\s*:\\s*[^;\"']+;?", "");
+        html = html.replaceAll("(?i)\\bmax-width\\s*:\\s*[^;\"']+;?", "");
+        html = html.replaceAll(
+                "(?i)(<table[^>]*)\\s+width\\s*=\\s*[\"'][^\"']*[\"']",
+                "$1");
+        html = html.replaceAll(
+                "(?i)(<t[dh][^>]*)\\s+width\\s*=\\s*[\"'][^\"']*[\"']",
+                "$1");
+        html = html.replaceAll(
+                "(?i)(<col[^>]*)\\s+width\\s*=\\s*[\"'][^\"']*[\"']",
+                "$1");
+
         // ===== WORD-SPECIFIC CLEANUP =====
 
         // 3a. Remove Word mso-* CSS properties (mso-table-lspace, mso-border-alt, etc.)
@@ -2225,6 +2243,8 @@ public class NoteSheetService extends BaseIbpsService {
         // 5d. Remove individual negative margin-left/margin-right that push content off-page
         html = html.replaceAll("(?i)margin-left\\s*:\\s*-[0-9]+\\.?[0-9]*(px|pt|cm|in|mm)\\s*;?", "");
         html = html.replaceAll("(?i)margin-right\\s*:\\s*-[0-9]+\\.?[0-9]*(px|pt|cm|in|mm)\\s*;?", "");
+        html = html.replaceAll("(?i)margin-left\\s*:\\s*calc\\([^;\"']+\\)\\s*;?", "");
+        html = html.replaceAll("(?i)margin-right\\s*:\\s*calc\\([^;\"']+\\)\\s*;?", "");
 
         // 5e. For shorthand margin with negative values, zero out the negative sides
         //     e.g. "margin: 0px -51px 10.6667px -48px" → "margin: 0px 0px 10.6667px 0px"
