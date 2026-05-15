@@ -58,6 +58,12 @@ public class NoteSheetService extends BaseIbpsService {
     @Value("${docs.viewer.base.url:}")
     private String docsViewerBaseUrl;
 
+    @Value("${notesheet.font.directories:}")
+    private String noteSheetFontDirectories;
+
+    private static final Object PDF_FONT_CONFIG_LOCK = new Object();
+    private static volatile boolean pdfFontsConfigured = false;
+
     /**
      * Main method to retrieve the original notesheet document.
      * Uses the notesheet_original work item attribute which contains:
@@ -1714,11 +1720,14 @@ public class NoteSheetService extends BaseIbpsService {
         // overflow-wrap ensures long unbreakable strings wrap instead of overflowing cells.
         String fullHtml = "<html>\n" +
                 "<head>\n" +
+                "  <meta charset=\"UTF-8\">\n" +
                 "  <style>\n" +
-                "    body { font-family: Arial, sans-serif; font-size: 12px; margin: 0; padding: 0; }\n" +
+                "    body { font-family: 'Nirmala UI', Mangal, 'Noto Sans Devanagari', Arial, sans-serif !important; font-size: 12px; margin: 0; padding: 0; }\n" +
+                "    * { font-family: 'Nirmala UI', Mangal, 'Noto Sans Devanagari', Arial, sans-serif !important; }\n" +
                 "    table { border-collapse: collapse; width: 100% !important; max-width: 100% !important; table-layout: fixed !important; }\n" +
-                "    td, th { border: 1px solid #333; padding: 4px; width: auto !important; white-space: normal !important; overflow-wrap: break-word !important; word-break: normal !important; }\n" +
-                "    p, li, span, strong { overflow-wrap: break-word; word-break: normal; }\n" +
+                "    td, th { border: 1px solid #333; padding: 4px; width: auto !important; white-space: normal !important; overflow-wrap: anywhere !important; word-break: break-word !important; }\n" +
+                "    p, li, span, strong { overflow-wrap: anywhere; word-break: break-word; }\n" +
+                "    img { max-width: 100% !important; height: auto !important; }\n" +
                 "  </style>\n" +
                 "</head>\n" +
                 "<body>\n" +
@@ -1735,11 +1744,15 @@ public class NoteSheetService extends BaseIbpsService {
         String pdfFileName = "newNoteContent-" + uniqueId + ".pdf";
         Path pdfPath = tempDir.resolve(pdfFileName);
 
+        configurePdfFonts();
+
         // Configure Aspose page layout
         // - A4 landscape-ready page size (default A4 portrait: 595 x 842 points)
         // - 20pt margins on all sides → usable width = 555pt
         // - IsRenderToSinglePage=false ensures multi-page support
         com.aspose.pdf.HtmlLoadOptions htmlOptions = new com.aspose.pdf.HtmlLoadOptions();
+        htmlOptions.setInputEncoding(StandardCharsets.UTF_8.name());
+        htmlOptions.setEmbedFonts(true);
         htmlOptions.setPageInfo(new com.aspose.pdf.PageInfo());
         htmlOptions.getPageInfo().setWidth(595);
         htmlOptions.getPageInfo().setHeight(842);
@@ -1769,6 +1782,50 @@ public class NoteSheetService extends BaseIbpsService {
                 pdfPath.toAbsolutePath().toString(), docResult.docIndices, docResult.docNames);
         log.info("Extracted {} view link positions from PDF for annotation creation", viewPositions.size());
         return new PdfGenerationResult(pdfPath.toAbsolutePath().toString(), viewPositions);
+    }
+
+    private void configurePdfFonts() {
+        if (pdfFontsConfigured) {
+            return;
+        }
+
+        synchronized (PDF_FONT_CONFIG_LOCK) {
+            if (pdfFontsConfigured) {
+                return;
+            }
+
+            java.util.LinkedHashSet<String> fontDirs = new java.util.LinkedHashSet<>();
+            if (noteSheetFontDirectories != null && !noteSheetFontDirectories.isBlank()) {
+                for (String configuredPath : noteSheetFontDirectories.split("[,;]")) {
+                    if (!configuredPath.isBlank()) {
+                        fontDirs.add(configuredPath.trim());
+                    }
+                }
+            }
+
+            fontDirs.add("C:\\Windows\\Fonts");
+            fontDirs.add("/usr/share/fonts");
+            fontDirs.add("/usr/local/share/fonts");
+
+            for (String fontDir : fontDirs) {
+                try {
+                    if (Files.isDirectory(Paths.get(fontDir))) {
+                        com.aspose.pdf.FontRepository.addLocalFontPath(fontDir);
+                        log.info("Registered PDF font directory: {}", fontDir);
+                    }
+                } catch (Exception e) {
+                    log.warn("Failed to register PDF font directory {}: {}", fontDir, e.getMessage());
+                }
+            }
+
+            try {
+                com.aspose.pdf.FontRepository.loadFonts();
+            } catch (Exception e) {
+                log.warn("Failed to preload PDF fonts: {}", e.getMessage());
+            }
+
+            pdfFontsConfigured = true;
+        }
     }
 
     /**
@@ -2121,6 +2178,8 @@ public class NoteSheetService extends BaseIbpsService {
     private String sanitizeHtmlForPdf(String html) {
         if (html == null || html.isEmpty()) return html;
 
+        html = forcePdfFontFamily(html);
+
         // ===== TABLE WIDTH FIXES =====
 
         // 1a. Replace absolute pixel/pt/cm/in widths on <table> style with 100%
@@ -2284,6 +2343,12 @@ public class NoteSheetService extends BaseIbpsService {
         html = html.replaceAll("(?i)style\\s*=\\s*[\"']\\s*[\"']", "");
 
         return html;
+    }
+
+    private String forcePdfFontFamily(String html) {
+        return html.replaceAll(
+                "(?i)font-family\\s*:\\s*[^;\"]+;?",
+                "font-family: 'Nirmala UI', Mangal, 'Noto Sans Devanagari', Arial, sans-serif;");
     }
 
     /**
