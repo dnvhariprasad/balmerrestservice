@@ -16,7 +16,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -56,6 +58,12 @@ public class NoteSheetService extends BaseIbpsService {
     @Value("${docs.viewer.base.url:}")
     private String docsViewerBaseUrl;
 
+    @Value("${notesheet.font.directories:}")
+    private String noteSheetFontDirectories;
+
+    private static final Object PDF_FONT_CONFIG_LOCK = new Object();
+    private static volatile boolean pdfFontsConfigured = false;
+
     /**
      * Main method to retrieve the original notesheet document.
      * Uses the notesheet_original work item attribute which contains:
@@ -73,7 +81,7 @@ public class NoteSheetService extends BaseIbpsService {
             // Step 1: Get work item attributes
             JsonNode attributes = fetchWorkItemAttributes(processInstanceId, workitemId, sessionId);
             if (attributes == null || attributes.has("error")) {
-                return createNotFoundResponse("Failed to fetch work item attributes");
+                return createNotFoundResponse(buildFetchAttributesFailureMessage(attributes));
             }
 
             // Step 2: Extract notesheet_original attribute (format:
@@ -144,7 +152,7 @@ public class NoteSheetService extends BaseIbpsService {
             // Step 1: Get work item attributes
             JsonNode attributes = fetchWorkItemAttributes(processInstanceId, workitemId, sessionId);
             if (attributes == null || attributes.has("error")) {
-                return createNotFoundResponse("Failed to fetch work item attributes");
+                return createNotFoundResponse(buildFetchAttributesFailureMessage(attributes));
             }
 
             // Step 2: Extract 'notesheet' attribute (format: FolderIndex#DocumentIndex)
@@ -288,55 +296,102 @@ public class NoteSheetService extends BaseIbpsService {
         log.info("Getting annotations for documentIndex: {}", documentIndex);
 
         try {
-            // Step 1: Build NGOGetAnnotationGroupList Input
-            ObjectNode input = jsonMapper.createObjectNode();
-            input.put("Option", "NGOGetAnnotationGroupList");
-            input.put("CabinetName", cabinetName);
-            input.put("UserDBId", String.valueOf(sessionId));
-            input.put("DocumentIndex", documentIndex);
-            input.put("PageNo", "1"); // Default to page 1
-            input.put("PreviousAnnotationIndex", "0");
-            // Omit VersionNo to get annotations for current/latest version
-            input.put("SortOrder", "A");
-            input.put("NoOfRecordsToFetch", "100");
+            // Step 1: Fetch annotation groups across pages and pagination.
+            final int maxPagesToScan = 500;
+            final int emptyPagesToStop = 3;
+            final int recordsPerFetch = 100;
 
-            // Step 2: Wrap in NGOExecuteAPIBDO structure for executeAPIJSON
-            ObjectNode inputData = jsonMapper.createObjectNode();
-            inputData.set("NGOGetAnnotationGroupList_Input", input);
+            ArrayNode allGroups = jsonMapper.createArrayNode();
+            Set<String> seenGroupKeys = new HashSet<>();
+            int pageNo = 1;
+            int consecutiveEmptyPages = 0;
 
-            ObjectNode ngoExecuteBDO = jsonMapper.createObjectNode();
-            ngoExecuteBDO.set("inputData", inputData);
-            ngoExecuteBDO.put("base64Encoded", "N");
-            ngoExecuteBDO.put("locale", "en_US");
+            while (pageNo <= maxPagesToScan && consecutiveEmptyPages < emptyPagesToStop) {
+                String previousAnnotationIndex = "0";
+                int groupsFoundOnPage = 0;
+                int fetchesForPage = 0;
 
-            ObjectNode payload = jsonMapper.createObjectNode();
-            payload.set("NGOExecuteAPIBDO", ngoExecuteBDO);
+                while (true) {
+                    // Build NGOGetAnnotationGroupList input for current page + pagination index.
+                    ObjectNode input = jsonMapper.createObjectNode();
+                    input.put("Option", "NGOGetAnnotationGroupList");
+                    input.put("CabinetName", cabinetName);
+                    input.put("UserDBId", String.valueOf(sessionId));
+                    input.put("DocumentIndex", documentIndex);
+                    input.put("PageNo", String.valueOf(pageNo));
+                    input.put("PreviousAnnotationIndex", previousAnnotationIndex);
+                    // Omit VersionNo to get annotations for current/latest version.
+                    input.put("SortOrder", "A");
+                    input.put("NoOfRecordsToFetch", String.valueOf(recordsPerFetch));
 
-            HttpHeaders headers = new HttpHeaders();
-            headers.setContentType(MediaType.APPLICATION_JSON);
-            HttpEntity<String> request = new HttpEntity<>(payload.toString(), headers);
+                    ObjectNode inputData = jsonMapper.createObjectNode();
+                    inputData.set("NGOGetAnnotationGroupList_Input", input);
 
-            log.info("Calling OmniDocs NGOGetAnnotationGroupList: docIndex={}, url={}", documentIndex, omniDocsApiUrl);
-            log.debug("Payload: {}", payload.toString());
+                    ObjectNode ngoExecuteBDO = jsonMapper.createObjectNode();
+                    ngoExecuteBDO.set("inputData", inputData);
+                    ngoExecuteBDO.put("base64Encoded", "N");
+                    ngoExecuteBDO.put("locale", "en_US");
 
-            ResponseEntity<String> response = restTemplate.exchange(omniDocsApiUrl, HttpMethod.POST, request,
-                    String.class);
+                    ObjectNode payload = jsonMapper.createObjectNode();
+                    payload.set("NGOExecuteAPIBDO", ngoExecuteBDO);
 
-            // Step 3: Parse response
-            JsonNode responseJson = parseXmlToJson(response.getBody());
-            JsonNode output = responseJson.path("NGOExecuteAPIResponseBDO").path("outputData")
-                    .path("NGOGetAnnotationGroupList_Output");
+                    HttpHeaders headers = new HttpHeaders();
+                    headers.setContentType(MediaType.APPLICATION_JSON);
+                    HttpEntity<String> request = new HttpEntity<>(payload.toString(), headers);
 
-            if (output.isMissingNode() || output.path("Status").asInt() != 0) {
-                String error = output.path("Error").asText(output.path("Status").asText("Unknown Error"));
-                log.error("OmniDocs Error: {}", error);
-                return createErrorResponse("Failed to get annotations", error);
+                    log.info("Calling NGOGetAnnotationGroupList: docIndex={}, pageNo={}, previousAnnotationIndex={}",
+                            documentIndex, pageNo, previousAnnotationIndex);
+                    ResponseEntity<String> response = restTemplate.exchange(
+                            omniDocsApiUrl, HttpMethod.POST, request, String.class);
+
+                    JsonNode responseJson = parseXmlToJson(response.getBody());
+                    JsonNode output = responseJson.path("NGOExecuteAPIResponseBDO").path("outputData")
+                            .path("NGOGetAnnotationGroupList_Output");
+
+                    if (output.isMissingNode() || output.path("Status").asInt() != 0) {
+                        String error = output.path("Error").asText(output.path("Status").asText("Unknown Error"));
+                        if (pageNo == 1 && allGroups.isEmpty()) {
+                            log.error("OmniDocs Error on first page while getting annotations: {}", error);
+                            return createErrorResponse("Failed to get annotations", error);
+                        }
+                        log.info("Stopping annotation scan at page {} due to status/error: {}", pageNo, error);
+                        break;
+                    }
+
+                    int addedThisCall = appendAnnotationGroups(output.path("AnnotationGroups"), allGroups, seenGroupKeys);
+                    groupsFoundOnPage += addedThisCall;
+                    fetchesForPage++;
+
+                    String nextAnnotationIndex = extractNextAnnotationIndex(output);
+                    boolean hasMore = nextAnnotationIndex != null
+                            && !nextAnnotationIndex.isBlank()
+                            && !nextAnnotationIndex.equals(previousAnnotationIndex)
+                            && !"0".equals(nextAnnotationIndex);
+
+                    if (addedThisCall == 0 || !hasMore || fetchesForPage >= 50) {
+                        break;
+                    }
+                    previousAnnotationIndex = nextAnnotationIndex;
+                }
+
+                if (groupsFoundOnPage == 0) {
+                    consecutiveEmptyPages++;
+                } else {
+                    consecutiveEmptyPages = 0;
+                }
+                pageNo++;
             }
 
-            JsonNode annotations = output.path("AnnotationGroups");
-            log.info("Retrieved annotations count/status: {}", annotations.size());
+            // Keep response shape compatible: annotations -> AnnotationGroup (object or array).
+            ObjectNode annotations = jsonMapper.createObjectNode();
+            if (allGroups.size() == 1) {
+                annotations.set("AnnotationGroup", allGroups.get(0));
+            } else if (allGroups.size() > 1) {
+                annotations.set("AnnotationGroup", allGroups);
+            }
+            log.info("Retrieved {} unique annotation groups for document {}", allGroups.size(), documentIndex);
 
-            // Step 4: Save to temp file
+            // Step 2: Save to temp file
             String fileName = "annotations_" + documentIndex + ".json";
             Path tempDir = Paths.get(tempDirectory.replace("notesheets", "annotations")); // Use distinct folder
             if (!Files.exists(tempDir)) {
@@ -347,10 +402,10 @@ public class NoteSheetService extends BaseIbpsService {
             Path filePath = tempDir.resolve(uniqueFileName);
 
             try (FileOutputStream fos = new FileOutputStream(filePath.toFile())) {
-                fos.write(output.toPrettyString().getBytes());
+                fos.write(annotations.toPrettyString().getBytes(StandardCharsets.UTF_8));
             }
 
-            // Step 5: Build success response
+            // Step 3: Build success response
             ObjectNode result = jsonMapper.createObjectNode();
             result.put("success", true);
             result.put("found", true);
@@ -364,6 +419,77 @@ public class NoteSheetService extends BaseIbpsService {
             log.error("Error retrieving annotations: {}", e.getMessage(), e);
             return createErrorResponse("Error retrieving annotations", e.getMessage());
         }
+    }
+
+    private int appendAnnotationGroups(JsonNode annotationGroupsNode, ArrayNode allGroups, Set<String> seenGroupKeys) {
+        if (annotationGroupsNode == null || annotationGroupsNode.isMissingNode()
+                || annotationGroupsNode.isNull() || annotationGroupsNode.isEmpty()) {
+            return 0;
+        }
+
+        JsonNode groupsNode = annotationGroupsNode.path("AnnotationGroup");
+        if (groupsNode.isMissingNode() || groupsNode.isNull()) {
+            if (annotationGroupsNode.isArray()) {
+                groupsNode = annotationGroupsNode;
+            } else if (annotationGroupsNode.has("AnnotGroupName")) {
+                groupsNode = annotationGroupsNode;
+            } else {
+                return 0;
+            }
+        }
+
+        int added = 0;
+        if (groupsNode.isArray()) {
+            for (JsonNode group : groupsNode) {
+                if (tryAddGroup(group, allGroups, seenGroupKeys)) {
+                    added++;
+                }
+            }
+        } else {
+            if (tryAddGroup(groupsNode, allGroups, seenGroupKeys)) {
+                added++;
+            }
+        }
+        return added;
+    }
+
+    private boolean tryAddGroup(JsonNode group, ArrayNode allGroups, Set<String> seenGroupKeys) {
+        if (group == null || !group.isObject()) {
+            return false;
+        }
+
+        String groupName = group.path("AnnotGroupName").asText("");
+        String pageNo = group.path("PageNo").asText("");
+        String buffer = group.path("AnnotationBuffer").asText("");
+        if (groupName.isBlank() && buffer.isBlank()) {
+            return false;
+        }
+
+        String key = groupName + "|" + pageNo + "|" + Integer.toHexString(buffer.hashCode());
+        if (!seenGroupKeys.add(key)) {
+            return false;
+        }
+
+        allGroups.add(group);
+        return true;
+    }
+
+    private String extractNextAnnotationIndex(JsonNode output) {
+        String[] candidates = new String[] {
+                output.path("NextAnnotationIndex").asText(""),
+                output.path("PreviousAnnotationIndex").asText(""),
+                output.path("LastAnnotationIndex").asText(""),
+                output.path("AnnotationGroups").path("NextAnnotationIndex").asText(""),
+                output.path("AnnotationGroups").path("PreviousAnnotationIndex").asText(""),
+                output.path("AnnotationGroups").path("LastAnnotationIndex").asText("")
+        };
+
+        for (String candidate : candidates) {
+            if (candidate != null && !candidate.isBlank()) {
+                return candidate.trim();
+            }
+        }
+        return "";
     }
 
     /**
@@ -749,6 +875,39 @@ public class NoteSheetService extends BaseIbpsService {
             log.debug("WMFetchWorkItemAttributes response OK");
             return result;
 
+        } catch (org.springframework.web.client.HttpClientErrorException e) {
+            String responseBody = e.getResponseBodyAsString();
+            log.warn("iBPS returned HTTP {}, parsing error body: {}",
+                    e.getStatusCode(), responseBody.substring(0, Math.min(300, responseBody.length())));
+            try {
+                JsonNode errorJson;
+
+                if (responseBody.trim().startsWith("[")) {
+                    errorJson = jsonMapper.readTree(responseBody).get(0);
+                } else if (responseBody.trim().startsWith("{")) {
+                    errorJson = jsonMapper.readTree(responseBody);
+                } else {
+                    errorJson = parseXmlToJson(responseBody);
+                }
+
+                JsonNode output = errorJson.path("WMFetchWorkItemAttributes_Output");
+                if (output.isMissingNode()) {
+                    output = errorJson;
+                }
+
+                int status = output.path("Status").asInt(-1);
+                JsonNode errorNode = output.path("Error").path("Exception");
+                String errorDesc = errorNode.path("Description").asText("");
+                if (errorDesc.isEmpty()) {
+                    errorDesc = errorNode.path("Subject").asText("Unknown iBPS error");
+                }
+
+                log.error("iBPS API error: Status={}, Description={}", status, errorDesc);
+                return createErrorResponse("iBPS error (Status " + status + "): " + errorDesc);
+            } catch (Exception parseEx) {
+                log.error("Failed to parse iBPS error response: {}", parseEx.getMessage());
+                return createErrorResponse("Error fetching work item: " + e.getStatusCode());
+            }
         } catch (org.springframework.web.client.HttpServerErrorException e) {
             // iBPS returns HTTP 500 with JSON or XML error body - parse it
             String responseBody = e.getResponseBodyAsString();
@@ -793,6 +952,34 @@ public class NoteSheetService extends BaseIbpsService {
             log.error("Error fetching work item attributes: {}", e.getMessage(), e);
             return createErrorResponse("Error fetching attributes", e.getMessage());
         }
+    }
+
+    /**
+     * Builds an actionable failure message from fetchWorkItemAttributes response.
+     */
+    private String buildFetchAttributesFailureMessage(JsonNode attributes) {
+        String base = "Failed to fetch work item attributes";
+        if (attributes == null) {
+            return base;
+        }
+
+        String error = attributes.path("error").asText("");
+        String details = attributes.path("details").asText("");
+        StringBuilder sb = new StringBuilder(base);
+
+        if (!error.isEmpty()) {
+            sb.append(": ").append(error);
+        }
+        if (!details.isEmpty()) {
+            if (!error.isEmpty()) {
+                sb.append(" - ");
+            } else {
+                sb.append(": ");
+            }
+            sb.append(details);
+        }
+
+        return sb.toString();
     }
 
     /**
@@ -1280,6 +1467,7 @@ public class NoteSheetService extends BaseIbpsService {
     private JsonNode createPdfNoteInternal(String processInstanceId, String workitemId, long sessionId,
             String extraSectionHtml) {
         log.info("Creating PDF note for processInstanceId: {}, workitemId: {}", processInstanceId, workitemId);
+        final long totalStartNanos = System.nanoTime();
         String uniqueId = UUID.randomUUID().toString();
         // Track temp files for cleanup
         List<Path> tempFilesToCleanup = new ArrayList<>();
@@ -1294,6 +1482,7 @@ public class NoteSheetService extends BaseIbpsService {
 
         try {
             // Step 1: Call getOriginalNotesheet
+            long stepStartNanos = System.nanoTime();
             log.info("Step 1: Getting original notesheet...");
             JsonNode originalResult = getOriginalNotesheet(processInstanceId, workitemId, sessionId);
             if (!originalResult.path("success").asBoolean(false) || !originalResult.path("found").asBoolean(false)) {
@@ -1303,14 +1492,18 @@ public class NoteSheetService extends BaseIbpsService {
             String originalDocIndex = originalResult.path("documentIndex").asText();
             String htmlFilePath = originalResult.path("filePath").asText();
             log.info("Original notesheet docIndex: {}, filePath: {}", originalDocIndex, htmlFilePath);
+            log.info("Step 1 completed in {} ms", elapsedMs(stepStartNanos));
 
             // Step 2: Call getComments
+            stepStartNanos = System.nanoTime();
             log.info("Step 2: Getting comments...");
             JsonNode commentsResult = getComments(processInstanceId, workitemId, sessionId);
             String commentsPath = saveCommentsToFile(commentsResult, uniqueId);
             log.info("Comments saved to: {}", commentsPath);
+            log.info("Step 2 completed in {} ms", elapsedMs(stepStartNanos));
 
             // Step 3: Call getNotesheet
+            stepStartNanos = System.nanoTime();
             log.info("Step 3: Getting notesheet document index...");
             JsonNode notesheetResult = getNotesheet(processInstanceId, workitemId, sessionId);
             if (!notesheetResult.path("success").asBoolean(false) || !notesheetResult.path("found").asBoolean(false)) {
@@ -1319,15 +1512,19 @@ public class NoteSheetService extends BaseIbpsService {
             }
             String notedocumentIndex = notesheetResult.path("documentIndex").asText();
             log.info("Notesheet docIndex: {}", notedocumentIndex);
+            log.info("Step 3 completed in {} ms", elapsedMs(stepStartNanos));
 
             // Step 4: Call getSupportingDocuments
+            stepStartNanos = System.nanoTime();
             log.info("Step 4: Getting supporting documents...");
             JsonNode supportingDocsResult = supportingDocsService.getSupportingDocuments(processInstanceId, workitemId, sessionId);
             JsonNode documentsArray = supportingDocsResult.path("documents");
             int docCount = supportingDocsResult.path("count").asInt(0);
             log.info("Found {} supporting documents", docCount);
+            log.info("Step 4 completed in {} ms", elapsedMs(stepStartNanos));
 
             // Step 5: Generate PDF with documents, comments, and track View positions
+            stepStartNanos = System.nanoTime();
             log.info("Step 5: Generating PDF with documents, comments, and position tracking...");
             JsonNode commentsArray = commentsResult.path("comments");
             PdfGenerationResult pdfResult = generatePdfWithPositions(
@@ -1335,6 +1532,7 @@ public class NoteSheetService extends BaseIbpsService {
             String pdfPath = pdfResult.pdfPath;
             List<ViewLinkPosition> viewPositions = pdfResult.viewPositions;
             log.info("PDF generated at: {} with {} view positions", pdfPath, viewPositions.size());
+            log.info("Step 5 completed in {} ms", elapsedMs(stepStartNanos));
 
             // Track temp files for cleanup
             tempFilesToCleanup.add(Paths.get(pdfPath));
@@ -1348,14 +1546,16 @@ public class NoteSheetService extends BaseIbpsService {
             tempFilesToCleanup.add(Paths.get(htmlFilePath));
 
             // Step 6: Call checkoutCheckinWithAnnotations (with filtering of existing View hyperlinks)
+            stepStartNanos = System.nanoTime();
             log.info("Step 6: Updating notesheet with new PDF...");
             JsonNode updateResult = documentOpsService.checkoutCheckinWithAnnotations(
-                    notedocumentIndex, pdfPath, sessionId, true);
+                    notedocumentIndex, pdfPath, sessionId, true, originalDocIndex);
 
             if (!updateResult.path("success").asBoolean(false)) {
                 return createErrorResponse("Failed to update notesheet",
                         updateResult.path("error").asText("Update failed"));
             }
+            log.info("Step 6 completed in {} ms", elapsedMs(stepStartNanos));
 
             // Step 7: Add View hyperlink annotations (grouped by page)
             // TEMPORARILY DISABLED per request
@@ -1407,17 +1607,24 @@ public class NoteSheetService extends BaseIbpsService {
             result.put("commentsPath", commentsPath);
             result.put("annotationsPreserved", updateResult.path("annotationsRestored").asBoolean(false));
             result.put("viewHyperlinksAdded", annotationsAdded);
+            result.put("durationMs", elapsedMs(totalStartNanos));
 
             log.info("PDF note created successfully. New version: {}", updateResult.path("newVersion").asText());
+            log.info("createPdfNote total duration: {} ms", elapsedMs(totalStartNanos));
             return result;
 
         } catch (Exception e) {
             log.error("Error creating PDF note: {}", e.getMessage(), e);
             return createErrorResponse("Error creating PDF note", e.getMessage());
         } finally {
+            log.info("createPdfNote finished (including failure/cleanup) in {} ms", elapsedMs(totalStartNanos));
             // Cleanup temp files (PDF, comments, debug HTML, original notesheet download)
             cleanupTempFiles(tempFilesToCleanup);
         }
+    }
+
+    private long elapsedMs(long startNanos) {
+        return (System.nanoTime() - startNanos) / 1_000_000L;
     }
 
     /**
@@ -1513,10 +1720,14 @@ public class NoteSheetService extends BaseIbpsService {
         // overflow-wrap ensures long unbreakable strings wrap instead of overflowing cells.
         String fullHtml = "<html>\n" +
                 "<head>\n" +
+                "  <meta charset=\"UTF-8\">\n" +
                 "  <style>\n" +
-                "    body { font-family: Arial, sans-serif; font-size: 12px; margin: 0; padding: 0; }\n" +
-                "    table { border-collapse: collapse; width: 100%; table-layout: auto; }\n" +
-                "    td, th { border: 1px solid #333; padding: 8px; overflow-wrap: break-word; word-wrap: break-word; }\n" +
+                "    body { font-family: 'Nirmala UI', Mangal, 'Noto Sans Devanagari', Arial, sans-serif !important; font-size: 12px; margin: 0; padding: 0; }\n" +
+                "    * { font-family: 'Nirmala UI', Mangal, 'Noto Sans Devanagari', Arial, sans-serif !important; }\n" +
+                "    table { border-collapse: collapse; width: 100% !important; max-width: 100% !important; table-layout: fixed !important; }\n" +
+                "    td, th { border: 1px solid #333; padding: 4px; width: auto !important; white-space: normal !important; overflow-wrap: anywhere !important; word-break: break-word !important; }\n" +
+                "    p, li, span, strong { overflow-wrap: anywhere; word-break: break-word; }\n" +
+                "    img { max-width: 100% !important; height: auto !important; }\n" +
                 "  </style>\n" +
                 "</head>\n" +
                 "<body>\n" +
@@ -1533,11 +1744,15 @@ public class NoteSheetService extends BaseIbpsService {
         String pdfFileName = "newNoteContent-" + uniqueId + ".pdf";
         Path pdfPath = tempDir.resolve(pdfFileName);
 
+        configurePdfFonts();
+
         // Configure Aspose page layout
         // - A4 landscape-ready page size (default A4 portrait: 595 x 842 points)
         // - 20pt margins on all sides → usable width = 555pt
         // - IsRenderToSinglePage=false ensures multi-page support
         com.aspose.pdf.HtmlLoadOptions htmlOptions = new com.aspose.pdf.HtmlLoadOptions();
+        htmlOptions.setInputEncoding(StandardCharsets.UTF_8.name());
+        htmlOptions.setEmbedFonts(true);
         htmlOptions.setPageInfo(new com.aspose.pdf.PageInfo());
         htmlOptions.getPageInfo().setWidth(595);
         htmlOptions.getPageInfo().setHeight(842);
@@ -1567,6 +1782,50 @@ public class NoteSheetService extends BaseIbpsService {
                 pdfPath.toAbsolutePath().toString(), docResult.docIndices, docResult.docNames);
         log.info("Extracted {} view link positions from PDF for annotation creation", viewPositions.size());
         return new PdfGenerationResult(pdfPath.toAbsolutePath().toString(), viewPositions);
+    }
+
+    private void configurePdfFonts() {
+        if (pdfFontsConfigured) {
+            return;
+        }
+
+        synchronized (PDF_FONT_CONFIG_LOCK) {
+            if (pdfFontsConfigured) {
+                return;
+            }
+
+            java.util.LinkedHashSet<String> fontDirs = new java.util.LinkedHashSet<>();
+            if (noteSheetFontDirectories != null && !noteSheetFontDirectories.isBlank()) {
+                for (String configuredPath : noteSheetFontDirectories.split("[,;]")) {
+                    if (!configuredPath.isBlank()) {
+                        fontDirs.add(configuredPath.trim());
+                    }
+                }
+            }
+
+            fontDirs.add("C:\\Windows\\Fonts");
+            fontDirs.add("/usr/share/fonts");
+            fontDirs.add("/usr/local/share/fonts");
+
+            for (String fontDir : fontDirs) {
+                try {
+                    if (Files.isDirectory(Paths.get(fontDir))) {
+                        com.aspose.pdf.FontRepository.addLocalFontPath(fontDir);
+                        log.info("Registered PDF font directory: {}", fontDir);
+                    }
+                } catch (Exception e) {
+                    log.warn("Failed to register PDF font directory {}: {}", fontDir, e.getMessage());
+                }
+            }
+
+            try {
+                com.aspose.pdf.FontRepository.loadFonts();
+            } catch (Exception e) {
+                log.warn("Failed to preload PDF fonts: {}", e.getMessage());
+            }
+
+            pdfFontsConfigured = true;
+        }
     }
 
     /**
@@ -1919,6 +2178,8 @@ public class NoteSheetService extends BaseIbpsService {
     private String sanitizeHtmlForPdf(String html) {
         if (html == null || html.isEmpty()) return html;
 
+        html = forcePdfFontFamily(html);
+
         // ===== TABLE WIDTH FIXES =====
 
         // 1a. Replace absolute pixel/pt/cm/in widths on <table> style with 100%
@@ -1958,6 +2219,23 @@ public class NoteSheetService extends BaseIbpsService {
                 "$1");
         html = html.replaceAll(
                 "(?i)(<col[^>]*)\\s+width\\s*=\\s*[\"'][0-9]+(px)?[\"']",
+                "$1");
+
+        // 2d. Dynamic Word/Froala content can contain percentage or non-numeric widths
+        //     (width:52%, width:auto, <table width="100%">, etc.). Strip those too so
+        //     the PDF wrapper CSS owns table sizing. The negative lookbehind prevents
+        //     accidentally matching border-width.
+        html = html.replaceAll("(?i)(?<!-)\\bwidth\\s*:\\s*[^;\"']+;?", "");
+        html = html.replaceAll("(?i)\\bmin-width\\s*:\\s*[^;\"']+;?", "");
+        html = html.replaceAll("(?i)\\bmax-width\\s*:\\s*[^;\"']+;?", "");
+        html = html.replaceAll(
+                "(?i)(<table[^>]*)\\s+width\\s*=\\s*[\"'][^\"']*[\"']",
+                "$1");
+        html = html.replaceAll(
+                "(?i)(<t[dh][^>]*)\\s+width\\s*=\\s*[\"'][^\"']*[\"']",
+                "$1");
+        html = html.replaceAll(
+                "(?i)(<col[^>]*)\\s+width\\s*=\\s*[\"'][^\"']*[\"']",
                 "$1");
 
         // ===== WORD-SPECIFIC CLEANUP =====
@@ -2024,6 +2302,8 @@ public class NoteSheetService extends BaseIbpsService {
         // 5d. Remove individual negative margin-left/margin-right that push content off-page
         html = html.replaceAll("(?i)margin-left\\s*:\\s*-[0-9]+\\.?[0-9]*(px|pt|cm|in|mm)\\s*;?", "");
         html = html.replaceAll("(?i)margin-right\\s*:\\s*-[0-9]+\\.?[0-9]*(px|pt|cm|in|mm)\\s*;?", "");
+        html = html.replaceAll("(?i)margin-left\\s*:\\s*calc\\([^;\"']+\\)\\s*;?", "");
+        html = html.replaceAll("(?i)margin-right\\s*:\\s*calc\\([^;\"']+\\)\\s*;?", "");
 
         // 5e. For shorthand margin with negative values, zero out the negative sides
         //     e.g. "margin: 0px -51px 10.6667px -48px" → "margin: 0px 0px 10.6667px 0px"
@@ -2063,6 +2343,12 @@ public class NoteSheetService extends BaseIbpsService {
         html = html.replaceAll("(?i)style\\s*=\\s*[\"']\\s*[\"']", "");
 
         return html;
+    }
+
+    private String forcePdfFontFamily(String html) {
+        return html.replaceAll(
+                "(?i)font-family\\s*:\\s*[^;\"]+;?",
+                "font-family: 'Nirmala UI', Mangal, 'Noto Sans Devanagari', Arial, sans-serif;");
     }
 
     /**
