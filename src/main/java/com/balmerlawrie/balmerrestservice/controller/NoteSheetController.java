@@ -216,8 +216,8 @@ public class NoteSheetController {
                                         createError("Missing required parameters: workitemId, processInstanceId"));
                 }
 
-                // Always use a fresh service account session for each request
-                Long sessionId = sessionManager.getFreshServiceSession();
+                // Reuse cached service session; only re-authenticates when the 5-min cache expires
+                Long sessionId = sessionManager.getServiceSession();
                 if (sessionId == null) {
                         return ResponseEntity.status(401)
                                         .body(createError("Failed to establish service session"));
