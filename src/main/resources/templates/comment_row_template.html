@@ -1,4 +1,9 @@
-<tbody style="page-break-inside: avoid">
+<table
+  border="1"
+  cellpadding="4"
+  cellspacing="0"
+  style="width: 100%; border-collapse: collapse; font-family: Arial, sans-serif; margin-top: -1px;"
+>
   <tr style="background: #f9f9f9">
     <td style="width: 50%"><b>Employee Name:</b> {{USER}}</td>
     <td style="width: 50%"><b>Date and Time:</b> {{DATE}}</td>
@@ -6,19 +11,13 @@
   <tr>
     <td
       colspan="2"
-      style="
-        padding: 5px;
-        word-wrap: normal;
-        word-break: normal;
-        overflow-wrap: normal;
-        white-space: pre-wrap;
-      "
+      style="padding: 5px; word-wrap: break-word; word-break: break-word; overflow-wrap: break-word;"
     >
       {{COMMENT_TEXT}}
     </td>
   </tr>
-  <tr style="border-bottom: 2px solid #999">
+  <tr>
     <td><b>Role:</b> {{STAGE}}</td>
     <td><b>Action Taken:</b> {{Actiontaken}}</td>
   </tr>
-</tbody>
+</table>

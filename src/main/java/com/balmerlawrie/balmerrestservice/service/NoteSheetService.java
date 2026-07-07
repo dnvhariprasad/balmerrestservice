@@ -658,6 +658,35 @@ public class NoteSheetService extends BaseIbpsService {
         return result;
     }
 
+    private JsonNode extractCommentsFromAttributes(JsonNode attributesResponse) {
+        ObjectMapper mapper = new ObjectMapper();
+        ObjectNode result = mapper.createObjectNode();
+        ArrayNode commentsList = result.putArray("comments");
+
+        JsonNode output = attributesResponse.path("WMFetchWorkItemAttributes_Output");
+        if (output.isMissingNode()) output = attributesResponse;
+
+        JsonNode attributes = output.path("Attributes");
+        if (!attributes.isMissingNode()) {
+            java.util.Map<String, JsonNode> historyAttrs = new java.util.LinkedHashMap<>();
+            java.util.Iterator<String> names = attributes.fieldNames();
+            while (names.hasNext()) {
+                String name = names.next();
+                if (name != null && name.toLowerCase().endsWith("commentshistory")) {
+                    JsonNode node = attributes.path(name);
+                    if (!node.isMissingNode()) historyAttrs.put(name.toLowerCase(), node);
+                }
+            }
+            for (JsonNode historyAttr : historyAttrs.values()) {
+                appendCommentsFromNode(historyAttr, commentsList, mapper);
+            }
+        }
+
+        result.put("success", true);
+        result.put("count", commentsList.size());
+        return result;
+    }
+
     private String getValue(JsonNode parent, String key) {
         if (parent == null || !parent.isObject()) {
             return "";
@@ -1481,47 +1510,71 @@ public class NoteSheetService extends BaseIbpsService {
         }
 
         try {
-            // Step 1: Call getOriginalNotesheet
+            // Step 1: Fetch work item attributes ONCE (replaces 3 separate sequential iBPS calls)
             long stepStartNanos = System.nanoTime();
-            log.info("Step 1: Getting original notesheet...");
-            JsonNode originalResult = getOriginalNotesheet(processInstanceId, workitemId, sessionId);
-            if (!originalResult.path("success").asBoolean(false) || !originalResult.path("found").asBoolean(false)) {
-                return createErrorResponse("Failed to get original notesheet",
-                        originalResult.path("message").asText("Not found"));
+            log.info("Step 1: Fetching work item attributes...");
+            JsonNode attributes = fetchWorkItemAttributes(processInstanceId, workitemId, sessionId);
+            if (attributes == null || attributes.has("error")) {
+                return createErrorResponse("Failed to get work item attributes",
+                        buildFetchAttributesFailureMessage(attributes));
             }
-            String originalDocIndex = originalResult.path("documentIndex").asText();
-            String htmlFilePath = originalResult.path("filePath").asText();
-            log.info("Original notesheet docIndex: {}, filePath: {}", originalDocIndex, htmlFilePath);
             log.info("Step 1 completed in {} ms", elapsedMs(stepStartNanos));
 
-            // Step 2: Call getComments
-            stepStartNanos = System.nanoTime();
-            log.info("Step 2: Getting comments...");
-            JsonNode commentsResult = getComments(processInstanceId, workitemId, sessionId);
-            String commentsPath = saveCommentsToFile(commentsResult, uniqueId);
-            log.info("Comments saved to: {}", commentsPath);
-            log.info("Step 2 completed in {} ms", elapsedMs(stepStartNanos));
-
-            // Step 3: Call getNotesheet
-            stepStartNanos = System.nanoTime();
-            log.info("Step 3: Getting notesheet document index...");
-            JsonNode notesheetResult = getNotesheet(processInstanceId, workitemId, sessionId);
-            if (!notesheetResult.path("success").asBoolean(false) || !notesheetResult.path("found").asBoolean(false)) {
-                return createErrorResponse("Failed to get notesheet",
-                        notesheetResult.path("message").asText("Not found"));
+            // Extract notesheet_original attribute (FolderIndex#VersionNo#DocumentIndex)
+            String notesheetOriginalValue = extractNotesheetOriginal(attributes);
+            if (notesheetOriginalValue == null || notesheetOriginalValue.isEmpty()) {
+                return createErrorResponse("Failed to get original notesheet", "notesheet_original attribute not found");
             }
-            String notedocumentIndex = notesheetResult.path("documentIndex").asText();
-            log.info("Notesheet docIndex: {}", notedocumentIndex);
-            log.info("Step 3 completed in {} ms", elapsedMs(stepStartNanos));
+            String[] origParts = notesheetOriginalValue.split("#");
+            if (origParts.length < 3) {
+                return createErrorResponse("Failed to get original notesheet",
+                        "Invalid notesheet_original format: " + notesheetOriginalValue);
+            }
+            String originalDocIndex = origParts[2];
+            log.info("originalDocIndex: {}", originalDocIndex);
 
-            // Step 4: Call getSupportingDocuments
+            // Extract notesheet attribute (FolderIndex#VersionNo#DocumentIndex)
+            String notesheetValue = extractNotesheetAttribute(attributes);
+            if (notesheetValue == null || notesheetValue.isEmpty()) {
+                return createErrorResponse("Failed to get notesheet", "notesheet attribute not found");
+            }
+            String[] notesParts = notesheetValue.split("#");
+            if (notesParts.length < 3) {
+                return createErrorResponse("Failed to get notesheet",
+                        "Invalid notesheet format: " + notesheetValue);
+            }
+            String notedocumentIndex = notesParts[2];
+            log.info("notedocumentIndex: {}", notedocumentIndex);
+
+            // Extract comments from the same attribute response (no extra iBPS call)
+            JsonNode commentsResult = extractCommentsFromAttributes(attributes);
+            String commentsPath = saveCommentsToFile(commentsResult, uniqueId);
+            log.info("Comments extracted and saved to: {}", commentsPath);
+
+            // Step 2 (parallel): Download original notesheet doc + get supporting documents concurrently
             stepStartNanos = System.nanoTime();
-            log.info("Step 4: Getting supporting documents...");
-            JsonNode supportingDocsResult = supportingDocsService.getSupportingDocuments(processInstanceId, workitemId, sessionId);
+            log.info("Step 2: Downloading original document and fetching supporting docs in parallel...");
+            final long finalSessionId = sessionId;
+            final String finalOriginalDocIndex = originalDocIndex;
+            java.util.concurrent.CompletableFuture<byte[]> docFuture =
+                    java.util.concurrent.CompletableFuture.supplyAsync(() ->
+                            downloadDocument(finalOriginalDocIndex, finalSessionId));
+            java.util.concurrent.CompletableFuture<JsonNode> supportingDocsFuture =
+                    java.util.concurrent.CompletableFuture.supplyAsync(() ->
+                            supportingDocsService.getSupportingDocuments(processInstanceId, workitemId, finalSessionId));
+
+            byte[] documentContent = docFuture.get();
+            if (documentContent == null || documentContent.length == 0) {
+                return createErrorResponse("Failed to get original notesheet", "Document download returned empty content");
+            }
+            String htmlFilePath = saveToTempFile(documentContent, "notesheet_original_" + processInstanceId);
+            tempFilesToCleanup.add(Paths.get(htmlFilePath));
+
+            JsonNode supportingDocsResult = supportingDocsFuture.get();
             JsonNode documentsArray = supportingDocsResult.path("documents");
             int docCount = supportingDocsResult.path("count").asInt(0);
-            log.info("Found {} supporting documents", docCount);
-            log.info("Step 4 completed in {} ms", elapsedMs(stepStartNanos));
+            log.info("Step 2 completed in {} ms — original doc: {} bytes, supporting docs: {}",
+                    elapsedMs(stepStartNanos), documentContent.length, docCount);
 
             // Step 5: Generate PDF with documents, comments, and track View positions
             stepStartNanos = System.nanoTime();
@@ -1542,8 +1595,7 @@ public class NoteSheetService extends BaseIbpsService {
             if (Files.exists(debugHtml)) {
                 tempFilesToCleanup.add(debugHtml);
             }
-            // Original notesheet temp file
-            tempFilesToCleanup.add(Paths.get(htmlFilePath));
+            // Original notesheet temp file already added to cleanup right after saveToTempFile
 
             // Step 6: Call checkoutCheckinWithAnnotations (with filtering of existing View hyperlinks)
             stepStartNanos = System.nanoTime();
@@ -1777,11 +1829,11 @@ public class NoteSheetService extends BaseIbpsService {
             }
         }
 
-        // Extract View positions from the generated PDF using Aspose
-        List<ViewLinkPosition> viewPositions = extractViewPositionsFromPdf(
-                pdfPath.toAbsolutePath().toString(), docResult.docIndices, docResult.docNames);
-        log.info("Extracted {} view link positions from PDF for annotation creation", viewPositions.size());
-        return new PdfGenerationResult(pdfPath.toAbsolutePath().toString(), viewPositions);
+        // extractViewPositionsFromPdf disabled — Step 7 (hyperlink annotations) is currently off
+        // List<ViewLinkPosition> viewPositions = extractViewPositionsFromPdf(
+        //         pdfPath.toAbsolutePath().toString(), docResult.docIndices, docResult.docNames);
+        // log.info("Extracted {} view link positions from PDF for annotation creation", viewPositions.size());
+        return new PdfGenerationResult(pdfPath.toAbsolutePath().toString(), new ArrayList<>());
     }
 
     private void configurePdfFonts() {
