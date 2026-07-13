@@ -137,6 +137,100 @@ public class NoteSheetService extends BaseIbpsService {
     }
 
     /**
+     * Retrieves the original notesheet document using a caller-specified attribute name
+     * instead of the default 'notesheet_original'. Used by TCR (attribute 'tcr_original').
+     * Does not alter behavior of {@link #getOriginalNotesheet(String, String, long)}.
+     */
+    public JsonNode getOriginalNotesheet(String processInstanceId, String workitemId, long sessionId,
+            String originalAttributeName) {
+        log.info("Getting original notesheet (attribute='{}') for processInstanceId: {}, workitemId: {}",
+                originalAttributeName, processInstanceId, workitemId);
+
+        try {
+            JsonNode attributes = fetchWorkItemAttributes(processInstanceId, workitemId, sessionId);
+            if (attributes == null || attributes.has("error")) {
+                return createNotFoundResponse(buildFetchAttributesFailureMessage(attributes));
+            }
+
+            String notesheetValue = extractAttributeValue(attributes, originalAttributeName);
+            if (notesheetValue == null || notesheetValue.isEmpty()) {
+                return createNotFoundResponse("No '" + originalAttributeName + "' attribute found in work item");
+            }
+
+            log.info("Found {} attribute: {}", originalAttributeName, notesheetValue);
+
+            String[] parts = notesheetValue.split("#");
+            if (parts.length < 3) {
+                return createNotFoundResponse("Invalid " + originalAttributeName + " format: " + notesheetValue);
+            }
+
+            String folderIndex = parts[0];
+            String versionNo = parts[1];
+            String documentIndex = parts[2];
+
+            byte[] documentContent = downloadDocument(documentIndex, sessionId);
+            if (documentContent == null || documentContent.length == 0) {
+                return createNotFoundResponse("Failed to download document content");
+            }
+
+            String documentName = originalAttributeName + "_" + processInstanceId;
+            String filePath = saveToTempFile(documentContent, documentName);
+
+            ObjectNode response = jsonMapper.createObjectNode();
+            response.put("success", true);
+            response.put("found", true);
+            response.put("filePath", filePath);
+            response.put("documentName", documentName);
+            response.put("documentIndex", documentIndex);
+            response.put("folderIndex", folderIndex);
+            response.put("versionNo", versionNo);
+            response.put("fileSize", documentContent.length);
+
+            log.info("Successfully retrieved {} to: {}", originalAttributeName, filePath);
+            return response;
+
+        } catch (Exception e) {
+            log.error("Error retrieving original notesheet (attribute='{}'): {}", originalAttributeName, e.getMessage(), e);
+            return createErrorResponse("Error retrieving notesheet", e.getMessage());
+        }
+    }
+
+    /**
+     * Case-insensitive lookup of a work item attribute's value, handling the
+     * common iBPS JSON shapes (direct text, empty-key "", or "content" key).
+     */
+    private String extractAttributeValue(JsonNode attributes, String attributeName) {
+        JsonNode output = attributes.path("WMFetchWorkItemAttributes_Output");
+        if (output.isMissingNode()) {
+            output = attributes;
+        }
+
+        JsonNode attrs = output.path("Attributes");
+        if (attrs.isMissingNode()) {
+            attrs = output;
+        }
+
+        JsonNode node = findFieldIgnoreCase(attrs, attributeName);
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return null;
+        }
+
+        String value = node.asText();
+        if (value != null && !value.isEmpty() && !value.equals("null")) {
+            return value;
+        }
+        value = node.path("").asText();
+        if (value != null && !value.isEmpty()) {
+            return value;
+        }
+        value = node.path("content").asText();
+        if (value != null && !value.isEmpty()) {
+            return value;
+        }
+        return null;
+    }
+
+    /**
      * Retrieves the notesheet document ID from work item attributes.
      * Parses the 'notesheet' attribute which contains: FolderIndex#DocumentIndex
      * 
@@ -679,6 +773,81 @@ public class NoteSheetService extends BaseIbpsService {
             }
             for (JsonNode historyAttr : historyAttrs.values()) {
                 appendCommentsFromNode(historyAttr, commentsList, mapper);
+            }
+        }
+
+        result.put("success", true);
+        result.put("count", commentsList.size());
+        return result;
+    }
+
+    /**
+     * TCR variant of {@link #extractCommentsFromAttributes}: reads only the
+     * 'Q_tcr_comments' attribute instead of scanning for any 'commentshistory'-suffixed attribute.
+     */
+    private JsonNode extractTcrCommentsFromAttributes(JsonNode attributesResponse) {
+        ObjectMapper mapper = new ObjectMapper();
+        ObjectNode result = mapper.createObjectNode();
+        ArrayNode commentsList = result.putArray("comments");
+
+        JsonNode output = attributesResponse.path("WMFetchWorkItemAttributes_Output");
+        if (output.isMissingNode()) output = attributesResponse;
+
+        JsonNode attributes = output.path("Attributes");
+        if (!attributes.isMissingNode()) {
+            JsonNode tcrCommentsNode = findFieldIgnoreCase(attributes, "Q_tcr_comments");
+            if (tcrCommentsNode != null) {
+                appendCommentsFromNode(tcrCommentsNode, commentsList, mapper);
+            }
+        }
+
+        result.put("success", true);
+        result.put("count", commentsList.size());
+        return result;
+    }
+
+    /**
+     * Corrigendum variant of {@link #extractCommentsFromAttributes}: reads only the
+     * 'Q_duedatecomments' attribute instead of scanning for any 'commentshistory'-suffixed attribute.
+     */
+    private JsonNode extractCorrigendumCommentsFromAttributes(JsonNode attributesResponse) {
+        ObjectMapper mapper = new ObjectMapper();
+        ObjectNode result = mapper.createObjectNode();
+        ArrayNode commentsList = result.putArray("comments");
+
+        JsonNode output = attributesResponse.path("WMFetchWorkItemAttributes_Output");
+        if (output.isMissingNode()) output = attributesResponse;
+
+        JsonNode attributes = output.path("Attributes");
+        if (!attributes.isMissingNode()) {
+            JsonNode corrigendumCommentsNode = findFieldIgnoreCase(attributes, "Q_duedatecomments");
+            if (corrigendumCommentsNode != null) {
+                appendCommentsFromNode(corrigendumCommentsNode, commentsList, mapper);
+            }
+        }
+
+        result.put("success", true);
+        result.put("count", commentsList.size());
+        return result;
+    }
+
+    /**
+     * Pricebidopening variant of {@link #extractCommentsFromAttributes}: reads only the
+     * 'Q_pricebid_comments' attribute instead of scanning for any 'commentshistory'-suffixed attribute.
+     */
+    private JsonNode extractPricebidopeningCommentsFromAttributes(JsonNode attributesResponse) {
+        ObjectMapper mapper = new ObjectMapper();
+        ObjectNode result = mapper.createObjectNode();
+        ArrayNode commentsList = result.putArray("comments");
+
+        JsonNode output = attributesResponse.path("WMFetchWorkItemAttributes_Output");
+        if (output.isMissingNode()) output = attributesResponse;
+
+        JsonNode attributes = output.path("Attributes");
+        if (!attributes.isMissingNode()) {
+            JsonNode pricebidCommentsNode = findFieldIgnoreCase(attributes, "Q_pricebid_comments");
+            if (pricebidCommentsNode != null) {
+                appendCommentsFromNode(pricebidCommentsNode, commentsList, mapper);
             }
         }
 
@@ -1491,6 +1660,398 @@ public class NoteSheetService extends BaseIbpsService {
     public JsonNode createPdfNoteWithExtraSection(String processInstanceId, String workitemId, long sessionId,
             String extraSectionHtml) {
         return createPdfNoteInternal(processInstanceId, workitemId, sessionId, extraSectionHtml);
+    }
+
+    /**
+     * TCR variant of {@link #createPdfNote(String, String, long)}: reads the original document
+     * from the 'tcr_original' attribute (instead of 'notesheet_original') and checks the generated
+     * PDF in against the document referenced by the 'tcr' attribute (instead of 'notesheet').
+     * Does not modify or share mutable state with {@link #createPdfNoteInternal}.
+     */
+    public JsonNode createTcrPdfNote(String processInstanceId, String workitemId, long sessionId) {
+        log.info("Creating TCR PDF note for processInstanceId: {}, workitemId: {}", processInstanceId, workitemId);
+        final long totalStartNanos = System.nanoTime();
+        String uniqueId = UUID.randomUUID().toString();
+        List<Path> tempFilesToCleanup = new ArrayList<>();
+
+        try {
+            long stepStartNanos = System.nanoTime();
+            log.info("Step 1: Fetching work item attributes...");
+            JsonNode attributes = fetchWorkItemAttributes(processInstanceId, workitemId, sessionId);
+            if (attributes == null || attributes.has("error")) {
+                return createErrorResponse("Failed to get work item attributes",
+                        buildFetchAttributesFailureMessage(attributes));
+            }
+            log.info("Step 1 completed in {} ms", elapsedMs(stepStartNanos));
+
+            // Extract tcr_original attribute (FolderIndex#VersionNo#DocumentIndex)
+            String tcrOriginalValue = extractAttributeValue(attributes, "tcr_original");
+            if (tcrOriginalValue == null || tcrOriginalValue.isEmpty()) {
+                return createErrorResponse("Failed to get original TCR notesheet", "tcr_original attribute not found");
+            }
+            String[] origParts = tcrOriginalValue.split("#");
+            if (origParts.length < 3) {
+                return createErrorResponse("Failed to get original TCR notesheet",
+                        "Invalid tcr_original format: " + tcrOriginalValue);
+            }
+            String originalDocIndex = origParts[2];
+            log.info("originalDocIndex: {}", originalDocIndex);
+
+            // Extract tcr attribute (FolderIndex#VersionNo#DocumentIndex) - check-in target
+            String tcrValue = extractAttributeValue(attributes, "tcr");
+            if (tcrValue == null || tcrValue.isEmpty()) {
+                return createErrorResponse("Failed to get TCR notesheet", "tcr attribute not found");
+            }
+            String[] notesParts = tcrValue.split("#");
+            if (notesParts.length < 3) {
+                return createErrorResponse("Failed to get TCR notesheet",
+                        "Invalid tcr format: " + tcrValue);
+            }
+            String notedocumentIndex = notesParts[2];
+            log.info("notedocumentIndex: {}", notedocumentIndex);
+
+            // Extract comments from the 'Q_tcr_comments' attribute (no extra iBPS call)
+            JsonNode commentsResult = extractTcrCommentsFromAttributes(attributes);
+            String commentsPath = saveCommentsToFile(commentsResult, uniqueId);
+            log.info("Comments extracted and saved to: {}", commentsPath);
+
+            // Step 2 (parallel): Download original TCR doc + get supporting documents concurrently
+            stepStartNanos = System.nanoTime();
+            log.info("Step 2: Downloading original document and fetching supporting docs in parallel...");
+            final long finalSessionId = sessionId;
+            final String finalOriginalDocIndex = originalDocIndex;
+            java.util.concurrent.CompletableFuture<byte[]> docFuture =
+                    java.util.concurrent.CompletableFuture.supplyAsync(() ->
+                            downloadDocument(finalOriginalDocIndex, finalSessionId));
+            java.util.concurrent.CompletableFuture<JsonNode> supportingDocsFuture =
+                    java.util.concurrent.CompletableFuture.supplyAsync(() ->
+                            supportingDocsService.getSupportingDocuments(processInstanceId, workitemId, finalSessionId));
+
+            byte[] documentContent = docFuture.get();
+            if (documentContent == null || documentContent.length == 0) {
+                return createErrorResponse("Failed to get original TCR notesheet", "Document download returned empty content");
+            }
+            String htmlFilePath = saveToTempFile(documentContent, "tcr_original_" + processInstanceId);
+            tempFilesToCleanup.add(Paths.get(htmlFilePath));
+
+            JsonNode supportingDocsResult = supportingDocsFuture.get();
+            JsonNode documentsArray = supportingDocsResult.path("documents");
+            int docCount = supportingDocsResult.path("count").asInt(0);
+            log.info("Step 2 completed in {} ms — original doc: {} bytes, supporting docs: {}",
+                    elapsedMs(stepStartNanos), documentContent.length, docCount);
+
+            // Step 3: Generate PDF with documents, comments, and track View positions
+            stepStartNanos = System.nanoTime();
+            log.info("Step 3: Generating PDF with documents, comments, and position tracking...");
+            JsonNode commentsArray = commentsResult.path("comments");
+            PdfGenerationResult pdfResult = generatePdfWithPositions(
+                    htmlFilePath, documentsArray, commentsArray, uniqueId, "");
+            String pdfPath = pdfResult.pdfPath;
+            log.info("PDF generated at: {}", pdfPath);
+            log.info("Step 3 completed in {} ms", elapsedMs(stepStartNanos));
+
+            tempFilesToCleanup.add(Paths.get(pdfPath));
+            tempFilesToCleanup.add(Paths.get(commentsPath));
+            Path debugHtml = Paths.get(tempDirectory).resolve("debug-" + uniqueId + ".html");
+            if (Files.exists(debugHtml)) {
+                tempFilesToCleanup.add(debugHtml);
+            }
+
+            // Step 4: Check the generated PDF in against the 'tcr' document
+            stepStartNanos = System.nanoTime();
+            log.info("Step 4: Checking in PDF to TCR document...");
+            JsonNode updateResult = documentOpsService.checkoutCheckinWithAnnotations(
+                    notedocumentIndex, pdfPath, sessionId, true, originalDocIndex);
+
+            if (!updateResult.path("success").asBoolean(false)) {
+                return createErrorResponse("Failed to update TCR notesheet",
+                        updateResult.path("error").asText("Update failed"));
+            }
+            log.info("Step 4 completed in {} ms", elapsedMs(stepStartNanos));
+
+            ObjectNode result = jsonMapper.createObjectNode();
+            result.put("success", true);
+            result.put("originalDocIndex", originalDocIndex);
+            result.put("notedocumentIndex", notedocumentIndex);
+            result.put("newVersion", updateResult.path("newVersion").asText());
+            result.put("pdfPath", pdfPath);
+            result.put("commentsPath", commentsPath);
+            result.put("annotationsPreserved", updateResult.path("annotationsRestored").asBoolean(false));
+            result.put("durationMs", elapsedMs(totalStartNanos));
+
+            log.info("TCR PDF note created successfully. New version: {}", updateResult.path("newVersion").asText());
+            log.info("createTcrPdfNote total duration: {} ms", elapsedMs(totalStartNanos));
+            return result;
+
+        } catch (Exception e) {
+            log.error("Error creating TCR PDF note: {}", e.getMessage(), e);
+            return createErrorResponse("Error creating TCR PDF note", e.getMessage());
+        } finally {
+            log.info("createTcrPdfNote finished (including failure/cleanup) in {} ms", elapsedMs(totalStartNanos));
+            cleanupTempFiles(tempFilesToCleanup);
+        }
+    }
+
+    /**
+     * Corrigendum variant of {@link #createPdfNote(String, String, long)}: reads the original document
+     * from the 'corrigendum_original' attribute (instead of 'notesheet_original') and checks the generated
+     * PDF in against the document referenced by the 'corrigendum' attribute (instead of 'notesheet').
+     * Comments are embedded from the 'Q_duedatecomments' attribute.
+     * Does not modify or share mutable state with {@link #createPdfNoteInternal}.
+     */
+    public JsonNode createCorrigendumPdfNote(String processInstanceId, String workitemId, long sessionId) {
+        log.info("Creating Corrigendum PDF note for processInstanceId: {}, workitemId: {}", processInstanceId, workitemId);
+        final long totalStartNanos = System.nanoTime();
+        String uniqueId = UUID.randomUUID().toString();
+        List<Path> tempFilesToCleanup = new ArrayList<>();
+
+        try {
+            long stepStartNanos = System.nanoTime();
+            log.info("Step 1: Fetching work item attributes...");
+            JsonNode attributes = fetchWorkItemAttributes(processInstanceId, workitemId, sessionId);
+            if (attributes == null || attributes.has("error")) {
+                return createErrorResponse("Failed to get work item attributes",
+                        buildFetchAttributesFailureMessage(attributes));
+            }
+            log.info("Step 1 completed in {} ms", elapsedMs(stepStartNanos));
+
+            // Extract corrigendum_original attribute (FolderIndex#VersionNo#DocumentIndex)
+            String corrigendumOriginalValue = extractAttributeValue(attributes, "corrigendum_original");
+            if (corrigendumOriginalValue == null || corrigendumOriginalValue.isEmpty()) {
+                return createErrorResponse("Failed to get original Corrigendum notesheet", "corrigendum_original attribute not found");
+            }
+            String[] origParts = corrigendumOriginalValue.split("#");
+            if (origParts.length < 3) {
+                return createErrorResponse("Failed to get original Corrigendum notesheet",
+                        "Invalid corrigendum_original format: " + corrigendumOriginalValue);
+            }
+            String originalDocIndex = origParts[2];
+            log.info("originalDocIndex: {}", originalDocIndex);
+
+            // Extract corrigendum attribute (FolderIndex#VersionNo#DocumentIndex) - check-in target
+            String corrigendumValue = extractAttributeValue(attributes, "corrigendum");
+            if (corrigendumValue == null || corrigendumValue.isEmpty()) {
+                return createErrorResponse("Failed to get Corrigendum notesheet", "corrigendum attribute not found");
+            }
+            String[] notesParts = corrigendumValue.split("#");
+            if (notesParts.length < 3) {
+                return createErrorResponse("Failed to get Corrigendum notesheet",
+                        "Invalid corrigendum format: " + corrigendumValue);
+            }
+            String notedocumentIndex = notesParts[2];
+            log.info("notedocumentIndex: {}", notedocumentIndex);
+
+            // Extract comments from the 'Q_duedatecomments' attribute (no extra iBPS call)
+            JsonNode commentsResult = extractCorrigendumCommentsFromAttributes(attributes);
+            String commentsPath = saveCommentsToFile(commentsResult, uniqueId);
+            log.info("Comments extracted and saved to: {}", commentsPath);
+
+            // Step 2 (parallel): Download original Corrigendum doc + get supporting documents concurrently
+            stepStartNanos = System.nanoTime();
+            log.info("Step 2: Downloading original document and fetching supporting docs in parallel...");
+            final long finalSessionId = sessionId;
+            final String finalOriginalDocIndex = originalDocIndex;
+            java.util.concurrent.CompletableFuture<byte[]> docFuture =
+                    java.util.concurrent.CompletableFuture.supplyAsync(() ->
+                            downloadDocument(finalOriginalDocIndex, finalSessionId));
+            java.util.concurrent.CompletableFuture<JsonNode> supportingDocsFuture =
+                    java.util.concurrent.CompletableFuture.supplyAsync(() ->
+                            supportingDocsService.getSupportingDocuments(processInstanceId, workitemId, finalSessionId));
+
+            byte[] documentContent = docFuture.get();
+            if (documentContent == null || documentContent.length == 0) {
+                return createErrorResponse("Failed to get original Corrigendum notesheet", "Document download returned empty content");
+            }
+            String htmlFilePath = saveToTempFile(documentContent, "corrigendum_original_" + processInstanceId);
+            tempFilesToCleanup.add(Paths.get(htmlFilePath));
+
+            JsonNode supportingDocsResult = supportingDocsFuture.get();
+            JsonNode documentsArray = supportingDocsResult.path("documents");
+            int docCount = supportingDocsResult.path("count").asInt(0);
+            log.info("Step 2 completed in {} ms — original doc: {} bytes, supporting docs: {}",
+                    elapsedMs(stepStartNanos), documentContent.length, docCount);
+
+            // Step 3: Generate PDF with documents, comments, and track View positions
+            stepStartNanos = System.nanoTime();
+            log.info("Step 3: Generating PDF with documents, comments, and position tracking...");
+            JsonNode commentsArray = commentsResult.path("comments");
+            PdfGenerationResult pdfResult = generatePdfWithPositions(
+                    htmlFilePath, documentsArray, commentsArray, uniqueId, "");
+            String pdfPath = pdfResult.pdfPath;
+            log.info("PDF generated at: {}", pdfPath);
+            log.info("Step 3 completed in {} ms", elapsedMs(stepStartNanos));
+
+            tempFilesToCleanup.add(Paths.get(pdfPath));
+            tempFilesToCleanup.add(Paths.get(commentsPath));
+            Path debugHtml = Paths.get(tempDirectory).resolve("debug-" + uniqueId + ".html");
+            if (Files.exists(debugHtml)) {
+                tempFilesToCleanup.add(debugHtml);
+            }
+
+            // Step 4: Check the generated PDF in against the 'corrigendum' document
+            stepStartNanos = System.nanoTime();
+            log.info("Step 4: Checking in PDF to Corrigendum document...");
+            JsonNode updateResult = documentOpsService.checkoutCheckinWithAnnotations(
+                    notedocumentIndex, pdfPath, sessionId, true, originalDocIndex);
+
+            if (!updateResult.path("success").asBoolean(false)) {
+                return createErrorResponse("Failed to update Corrigendum notesheet",
+                        updateResult.path("error").asText("Update failed"));
+            }
+            log.info("Step 4 completed in {} ms", elapsedMs(stepStartNanos));
+
+            ObjectNode result = jsonMapper.createObjectNode();
+            result.put("success", true);
+            result.put("originalDocIndex", originalDocIndex);
+            result.put("notedocumentIndex", notedocumentIndex);
+            result.put("newVersion", updateResult.path("newVersion").asText());
+            result.put("pdfPath", pdfPath);
+            result.put("commentsPath", commentsPath);
+            result.put("annotationsPreserved", updateResult.path("annotationsRestored").asBoolean(false));
+            result.put("durationMs", elapsedMs(totalStartNanos));
+
+            log.info("Corrigendum PDF note created successfully. New version: {}", updateResult.path("newVersion").asText());
+            log.info("createCorrigendumPdfNote total duration: {} ms", elapsedMs(totalStartNanos));
+            return result;
+
+        } catch (Exception e) {
+            log.error("Error creating Corrigendum PDF note: {}", e.getMessage(), e);
+            return createErrorResponse("Error creating Corrigendum PDF note", e.getMessage());
+        } finally {
+            log.info("createCorrigendumPdfNote finished (including failure/cleanup) in {} ms", elapsedMs(totalStartNanos));
+            cleanupTempFiles(tempFilesToCleanup);
+        }
+    }
+
+    /**
+     * Pricebidopening variant of {@link #createPdfNote(String, String, long)}: reads the original document
+     * from the 'pricebidopening_original' attribute (instead of 'notesheet_original') and checks the generated
+     * PDF in against the document referenced by the 'pricebidopening' attribute (instead of 'notesheet').
+     * Comments are embedded from the 'Q_pricebid_comments' attribute.
+     * Does not modify or share mutable state with {@link #createPdfNoteInternal}.
+     */
+    public JsonNode createPricebidopeningPdfNote(String processInstanceId, String workitemId, long sessionId) {
+        log.info("Creating Pricebidopening PDF note for processInstanceId: {}, workitemId: {}", processInstanceId, workitemId);
+        final long totalStartNanos = System.nanoTime();
+        String uniqueId = UUID.randomUUID().toString();
+        List<Path> tempFilesToCleanup = new ArrayList<>();
+
+        try {
+            long stepStartNanos = System.nanoTime();
+            log.info("Step 1: Fetching work item attributes...");
+            JsonNode attributes = fetchWorkItemAttributes(processInstanceId, workitemId, sessionId);
+            if (attributes == null || attributes.has("error")) {
+                return createErrorResponse("Failed to get work item attributes",
+                        buildFetchAttributesFailureMessage(attributes));
+            }
+            log.info("Step 1 completed in {} ms", elapsedMs(stepStartNanos));
+
+            // Extract pricebidopening_original attribute (FolderIndex#VersionNo#DocumentIndex)
+            String pricebidOriginalValue = extractAttributeValue(attributes, "pricebidopening_original");
+            if (pricebidOriginalValue == null || pricebidOriginalValue.isEmpty()) {
+                return createErrorResponse("Failed to get original Pricebidopening notesheet", "pricebidopening_original attribute not found");
+            }
+            String[] origParts = pricebidOriginalValue.split("#");
+            if (origParts.length < 3) {
+                return createErrorResponse("Failed to get original Pricebidopening notesheet",
+                        "Invalid pricebidopening_original format: " + pricebidOriginalValue);
+            }
+            String originalDocIndex = origParts[2];
+            log.info("originalDocIndex: {}", originalDocIndex);
+
+            // Extract pricebidopening attribute (FolderIndex#VersionNo#DocumentIndex) - check-in target
+            String pricebidValue = extractAttributeValue(attributes, "pricebidopening");
+            if (pricebidValue == null || pricebidValue.isEmpty()) {
+                return createErrorResponse("Failed to get Pricebidopening notesheet", "pricebidopening attribute not found");
+            }
+            String[] notesParts = pricebidValue.split("#");
+            if (notesParts.length < 3) {
+                return createErrorResponse("Failed to get Pricebidopening notesheet",
+                        "Invalid pricebidopening format: " + pricebidValue);
+            }
+            String notedocumentIndex = notesParts[2];
+            log.info("notedocumentIndex: {}", notedocumentIndex);
+
+            // Extract comments from the 'Q_pricebid_comments' attribute (no extra iBPS call)
+            JsonNode commentsResult = extractPricebidopeningCommentsFromAttributes(attributes);
+            String commentsPath = saveCommentsToFile(commentsResult, uniqueId);
+            log.info("Comments extracted and saved to: {}", commentsPath);
+
+            // Step 2 (parallel): Download original Pricebidopening doc + get supporting documents concurrently
+            stepStartNanos = System.nanoTime();
+            log.info("Step 2: Downloading original document and fetching supporting docs in parallel...");
+            final long finalSessionId = sessionId;
+            final String finalOriginalDocIndex = originalDocIndex;
+            java.util.concurrent.CompletableFuture<byte[]> docFuture =
+                    java.util.concurrent.CompletableFuture.supplyAsync(() ->
+                            downloadDocument(finalOriginalDocIndex, finalSessionId));
+            java.util.concurrent.CompletableFuture<JsonNode> supportingDocsFuture =
+                    java.util.concurrent.CompletableFuture.supplyAsync(() ->
+                            supportingDocsService.getSupportingDocuments(processInstanceId, workitemId, finalSessionId));
+
+            byte[] documentContent = docFuture.get();
+            if (documentContent == null || documentContent.length == 0) {
+                return createErrorResponse("Failed to get original Pricebidopening notesheet", "Document download returned empty content");
+            }
+            String htmlFilePath = saveToTempFile(documentContent, "pricebidopening_original_" + processInstanceId);
+            tempFilesToCleanup.add(Paths.get(htmlFilePath));
+
+            JsonNode supportingDocsResult = supportingDocsFuture.get();
+            JsonNode documentsArray = supportingDocsResult.path("documents");
+            int docCount = supportingDocsResult.path("count").asInt(0);
+            log.info("Step 2 completed in {} ms — original doc: {} bytes, supporting docs: {}",
+                    elapsedMs(stepStartNanos), documentContent.length, docCount);
+
+            // Step 3: Generate PDF with documents, comments, and track View positions
+            stepStartNanos = System.nanoTime();
+            log.info("Step 3: Generating PDF with documents, comments, and position tracking...");
+            JsonNode commentsArray = commentsResult.path("comments");
+            PdfGenerationResult pdfResult = generatePdfWithPositions(
+                    htmlFilePath, documentsArray, commentsArray, uniqueId, "");
+            String pdfPath = pdfResult.pdfPath;
+            log.info("PDF generated at: {}", pdfPath);
+            log.info("Step 3 completed in {} ms", elapsedMs(stepStartNanos));
+
+            tempFilesToCleanup.add(Paths.get(pdfPath));
+            tempFilesToCleanup.add(Paths.get(commentsPath));
+            Path debugHtml = Paths.get(tempDirectory).resolve("debug-" + uniqueId + ".html");
+            if (Files.exists(debugHtml)) {
+                tempFilesToCleanup.add(debugHtml);
+            }
+
+            // Step 4: Check the generated PDF in against the 'pricebidopening' document
+            stepStartNanos = System.nanoTime();
+            log.info("Step 4: Checking in PDF to Pricebidopening document...");
+            JsonNode updateResult = documentOpsService.checkoutCheckinWithAnnotations(
+                    notedocumentIndex, pdfPath, sessionId, true, originalDocIndex);
+
+            if (!updateResult.path("success").asBoolean(false)) {
+                return createErrorResponse("Failed to update Pricebidopening notesheet",
+                        updateResult.path("error").asText("Update failed"));
+            }
+            log.info("Step 4 completed in {} ms", elapsedMs(stepStartNanos));
+
+            ObjectNode result = jsonMapper.createObjectNode();
+            result.put("success", true);
+            result.put("originalDocIndex", originalDocIndex);
+            result.put("notedocumentIndex", notedocumentIndex);
+            result.put("newVersion", updateResult.path("newVersion").asText());
+            result.put("pdfPath", pdfPath);
+            result.put("commentsPath", commentsPath);
+            result.put("annotationsPreserved", updateResult.path("annotationsRestored").asBoolean(false));
+            result.put("durationMs", elapsedMs(totalStartNanos));
+
+            log.info("Pricebidopening PDF note created successfully. New version: {}", updateResult.path("newVersion").asText());
+            log.info("createPricebidopeningPdfNote total duration: {} ms", elapsedMs(totalStartNanos));
+            return result;
+
+        } catch (Exception e) {
+            log.error("Error creating Pricebidopening PDF note: {}", e.getMessage(), e);
+            return createErrorResponse("Error creating Pricebidopening PDF note", e.getMessage());
+        } finally {
+            log.info("createPricebidopeningPdfNote finished (including failure/cleanup) in {} ms", elapsedMs(totalStartNanos));
+            cleanupTempFiles(tempFilesToCleanup);
+        }
     }
 
     private JsonNode createPdfNoteInternal(String processInstanceId, String workitemId, long sessionId,
