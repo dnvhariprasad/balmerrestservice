@@ -35,10 +35,11 @@ public class NegotiationController {
     private WorkItemAttributesService workItemAttributesService;
 
     private static final String NEGOTIATION_COMMENTS_ATTRIBUTE = "Q_negotiation_comments";
+    private static final String NEGOTIATION_ORIGINAL_ATTRIBUTE = "negotiation_original";
 
     private final ObjectMapper mapper = new ObjectMapper();
 
-    @Operation(summary = "Get Original Notesheet", description = "Retrieves the original notesheet document from the work item's attachment folder.")
+    @Operation(summary = "Get Original Notesheet", description = "Retrieves the original Negotiation document (from the '" + NEGOTIATION_ORIGINAL_ATTRIBUTE + "' work item attribute) from the work item's attachment folder.")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "200", description = "Request processed successfully. Check 'found' field to see if document was located.", content = @Content(mediaType = "application/json", examples = {
                     @ExampleObject(name = "Document Found", value = "{\"success\":true,\"found\":true,\"filePath\":\"/tmp/notesheets/abc123.pdf\",\"documentName\":\"notesheet.pdf\"}"),
@@ -59,7 +60,7 @@ public class NegotiationController {
             return ResponseEntity.badRequest().body(createError("Missing processInstanceId parameter"));
         }
 
-        JsonNode result = noteSheetService.getOriginalNotesheet(processInstanceId, workitemId, sessionId);
+        JsonNode result = noteSheetService.getOriginalNotesheet(processInstanceId, workitemId, sessionId, NEGOTIATION_ORIGINAL_ATTRIBUTE);
         return ResponseEntity.ok(result);
     }
 
@@ -312,7 +313,7 @@ public class NegotiationController {
         return ResponseEntity.ok(result);
     }
 
-    @Operation(summary = "Create PDF Note", description = "Creates a PDF from the original notesheet with appended comments and updates the notesheet document.")
+    @Operation(summary = "Create PDF Note", description = "Creates a PDF from the original Negotiation document (attribute '" + NEGOTIATION_ORIGINAL_ATTRIBUTE + "') with appended comments and checks it in against the document referenced by the 'negotiation' work item attribute.")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "200", description = "PDF note created successfully", content = @Content(mediaType = "application/json", examples = {
                     @ExampleObject(name = "Success", value = "{\n"
@@ -343,7 +344,7 @@ public class NegotiationController {
             return ResponseEntity.status(401).body(createError("Failed to establish service session"));
         }
 
-        JsonNode result = noteSheetService.createPdfNote(processInstanceId, workitemId, sessionId);
+        JsonNode result = noteSheetService.createNegotiationPdfNote(processInstanceId, workitemId, sessionId);
 
         if (!result.path("success").asBoolean(true)) {
             String error = result.path("error").asText("").toLowerCase();

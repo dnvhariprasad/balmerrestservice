@@ -856,6 +856,31 @@ public class NoteSheetService extends BaseIbpsService {
         return result;
     }
 
+    /**
+     * Negotiation variant of {@link #extractCommentsFromAttributes}: reads only the
+     * 'Q_negotiation_comments' attribute instead of scanning for any 'commentshistory'-suffixed attribute.
+     */
+    private JsonNode extractNegotiationCommentsFromAttributes(JsonNode attributesResponse) {
+        ObjectMapper mapper = new ObjectMapper();
+        ObjectNode result = mapper.createObjectNode();
+        ArrayNode commentsList = result.putArray("comments");
+
+        JsonNode output = attributesResponse.path("WMFetchWorkItemAttributes_Output");
+        if (output.isMissingNode()) output = attributesResponse;
+
+        JsonNode attributes = output.path("Attributes");
+        if (!attributes.isMissingNode()) {
+            JsonNode negotiationCommentsNode = findFieldIgnoreCase(attributes, "Q_negotiation_comments");
+            if (negotiationCommentsNode != null) {
+                appendCommentsFromNode(negotiationCommentsNode, commentsList, mapper);
+            }
+        }
+
+        result.put("success", true);
+        result.put("count", commentsList.size());
+        return result;
+    }
+
     private String getValue(JsonNode parent, String key) {
         if (parent == null || !parent.isObject()) {
             return "";
@@ -2050,6 +2075,137 @@ public class NoteSheetService extends BaseIbpsService {
             return createErrorResponse("Error creating Pricebidopening PDF note", e.getMessage());
         } finally {
             log.info("createPricebidopeningPdfNote finished (including failure/cleanup) in {} ms", elapsedMs(totalStartNanos));
+            cleanupTempFiles(tempFilesToCleanup);
+        }
+    }
+
+    /**
+     * Negotiation variant of {@link #createPdfNote(String, String, long)}: reads the original document
+     * from the 'negotiation_original' attribute (instead of 'notesheet_original') and checks the generated
+     * PDF in against the document referenced by the 'negotiation' attribute (instead of 'notesheet').
+     * Comments are embedded from the 'Q_negotiation_comments' attribute.
+     * Does not modify or share mutable state with {@link #createPdfNoteInternal}.
+     */
+    public JsonNode createNegotiationPdfNote(String processInstanceId, String workitemId, long sessionId) {
+        log.info("Creating Negotiation PDF note for processInstanceId: {}, workitemId: {}", processInstanceId, workitemId);
+        final long totalStartNanos = System.nanoTime();
+        String uniqueId = UUID.randomUUID().toString();
+        List<Path> tempFilesToCleanup = new ArrayList<>();
+
+        try {
+            long stepStartNanos = System.nanoTime();
+            log.info("Step 1: Fetching work item attributes...");
+            JsonNode attributes = fetchWorkItemAttributes(processInstanceId, workitemId, sessionId);
+            if (attributes == null || attributes.has("error")) {
+                return createErrorResponse("Failed to get work item attributes",
+                        buildFetchAttributesFailureMessage(attributes));
+            }
+            log.info("Step 1 completed in {} ms", elapsedMs(stepStartNanos));
+
+            // Extract negotiation_original attribute (FolderIndex#VersionNo#DocumentIndex)
+            String negotiationOriginalValue = extractAttributeValue(attributes, "negotiation_original");
+            if (negotiationOriginalValue == null || negotiationOriginalValue.isEmpty()) {
+                return createErrorResponse("Failed to get original Negotiation notesheet", "negotiation_original attribute not found");
+            }
+            String[] origParts = negotiationOriginalValue.split("#");
+            if (origParts.length < 3) {
+                return createErrorResponse("Failed to get original Negotiation notesheet",
+                        "Invalid negotiation_original format: " + negotiationOriginalValue);
+            }
+            String originalDocIndex = origParts[2];
+            log.info("originalDocIndex: {}", originalDocIndex);
+
+            // Extract negotiation attribute (FolderIndex#VersionNo#DocumentIndex) - check-in target
+            String negotiationValue = extractAttributeValue(attributes, "negotiation");
+            if (negotiationValue == null || negotiationValue.isEmpty()) {
+                return createErrorResponse("Failed to get Negotiation notesheet", "negotiation attribute not found");
+            }
+            String[] notesParts = negotiationValue.split("#");
+            if (notesParts.length < 3) {
+                return createErrorResponse("Failed to get Negotiation notesheet",
+                        "Invalid negotiation format: " + negotiationValue);
+            }
+            String notedocumentIndex = notesParts[2];
+            log.info("notedocumentIndex: {}", notedocumentIndex);
+
+            // Extract comments from the 'Q_negotiation_comments' attribute (no extra iBPS call)
+            JsonNode commentsResult = extractNegotiationCommentsFromAttributes(attributes);
+            String commentsPath = saveCommentsToFile(commentsResult, uniqueId);
+            log.info("Comments extracted and saved to: {}", commentsPath);
+
+            // Step 2 (parallel): Download original Negotiation doc + get supporting documents concurrently
+            stepStartNanos = System.nanoTime();
+            log.info("Step 2: Downloading original document and fetching supporting docs in parallel...");
+            final long finalSessionId = sessionId;
+            final String finalOriginalDocIndex = originalDocIndex;
+            java.util.concurrent.CompletableFuture<byte[]> docFuture =
+                    java.util.concurrent.CompletableFuture.supplyAsync(() ->
+                            downloadDocument(finalOriginalDocIndex, finalSessionId));
+            java.util.concurrent.CompletableFuture<JsonNode> supportingDocsFuture =
+                    java.util.concurrent.CompletableFuture.supplyAsync(() ->
+                            supportingDocsService.getSupportingDocuments(processInstanceId, workitemId, finalSessionId));
+
+            byte[] documentContent = docFuture.get();
+            if (documentContent == null || documentContent.length == 0) {
+                return createErrorResponse("Failed to get original Negotiation notesheet", "Document download returned empty content");
+            }
+            String htmlFilePath = saveToTempFile(documentContent, "negotiation_original_" + processInstanceId);
+            tempFilesToCleanup.add(Paths.get(htmlFilePath));
+
+            JsonNode supportingDocsResult = supportingDocsFuture.get();
+            JsonNode documentsArray = supportingDocsResult.path("documents");
+            int docCount = supportingDocsResult.path("count").asInt(0);
+            log.info("Step 2 completed in {} ms — original doc: {} bytes, supporting docs: {}",
+                    elapsedMs(stepStartNanos), documentContent.length, docCount);
+
+            // Step 3: Generate PDF with documents, comments, and track View positions
+            stepStartNanos = System.nanoTime();
+            log.info("Step 3: Generating PDF with documents, comments, and position tracking...");
+            JsonNode commentsArray = commentsResult.path("comments");
+            PdfGenerationResult pdfResult = generatePdfWithPositions(
+                    htmlFilePath, documentsArray, commentsArray, uniqueId, "");
+            String pdfPath = pdfResult.pdfPath;
+            log.info("PDF generated at: {}", pdfPath);
+            log.info("Step 3 completed in {} ms", elapsedMs(stepStartNanos));
+
+            tempFilesToCleanup.add(Paths.get(pdfPath));
+            tempFilesToCleanup.add(Paths.get(commentsPath));
+            Path debugHtml = Paths.get(tempDirectory).resolve("debug-" + uniqueId + ".html");
+            if (Files.exists(debugHtml)) {
+                tempFilesToCleanup.add(debugHtml);
+            }
+
+            // Step 4: Check the generated PDF in against the 'negotiation' document
+            stepStartNanos = System.nanoTime();
+            log.info("Step 4: Checking in PDF to Negotiation document...");
+            JsonNode updateResult = documentOpsService.checkoutCheckinWithAnnotations(
+                    notedocumentIndex, pdfPath, sessionId, true, originalDocIndex);
+
+            if (!updateResult.path("success").asBoolean(false)) {
+                return createErrorResponse("Failed to update Negotiation notesheet",
+                        updateResult.path("error").asText("Update failed"));
+            }
+            log.info("Step 4 completed in {} ms", elapsedMs(stepStartNanos));
+
+            ObjectNode result = jsonMapper.createObjectNode();
+            result.put("success", true);
+            result.put("originalDocIndex", originalDocIndex);
+            result.put("notedocumentIndex", notedocumentIndex);
+            result.put("newVersion", updateResult.path("newVersion").asText());
+            result.put("pdfPath", pdfPath);
+            result.put("commentsPath", commentsPath);
+            result.put("annotationsPreserved", updateResult.path("annotationsRestored").asBoolean(false));
+            result.put("durationMs", elapsedMs(totalStartNanos));
+
+            log.info("Negotiation PDF note created successfully. New version: {}", updateResult.path("newVersion").asText());
+            log.info("createNegotiationPdfNote total duration: {} ms", elapsedMs(totalStartNanos));
+            return result;
+
+        } catch (Exception e) {
+            log.error("Error creating Negotiation PDF note: {}", e.getMessage(), e);
+            return createErrorResponse("Error creating Negotiation PDF note", e.getMessage());
+        } finally {
+            log.info("createNegotiationPdfNote finished (including failure/cleanup) in {} ms", elapsedMs(totalStartNanos));
             cleanupTempFiles(tempFilesToCleanup);
         }
     }
