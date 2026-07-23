@@ -49,19 +49,33 @@ public class NegotiationController {
     })
     @GetMapping(value = "/getoriginal", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<JsonNode> getOriginalNotesheet(
-            @Parameter(description = "Work Item ID", required = true) @RequestParam String workitemId,
-            @Parameter(description = "Process Instance ID", required = true) @RequestParam String processInstanceId,
+            @Parameter(description = "Work Item ID", required = true) @RequestParam(required = false) String workitemId,
+            @Parameter(description = "Work Item ID (alternate casing)") @RequestParam(value = "workItemId", required = false) String workitemIdAlt,
+            @Parameter(description = "Process Instance ID", required = true) @RequestParam(required = false) String processInstanceId,
+            @Parameter(description = "Process Instance ID (alternate casing)") @RequestParam(value = "ProcessInstanceId", required = false) String processInstanceIdAlt,
             @Parameter(description = "Session ID from login", required = true) @RequestHeader("sessionId") long sessionId) {
 
-        if (workitemId == null || workitemId.isEmpty()) {
+        String resolvedProcessInstanceId = firstNonEmpty(processInstanceId, processInstanceIdAlt);
+        String workitemIdResolved = firstNonEmpty(workitemId, workitemIdAlt);
+
+        if (workitemIdResolved == null || workitemIdResolved.isEmpty()) {
             return ResponseEntity.badRequest().body(createError("Missing workitemId parameter"));
         }
-        if (processInstanceId == null || processInstanceId.isEmpty()) {
+        if (resolvedProcessInstanceId == null || resolvedProcessInstanceId.isEmpty()) {
             return ResponseEntity.badRequest().body(createError("Missing processInstanceId parameter"));
         }
 
-        JsonNode result = noteSheetService.getOriginalNotesheet(processInstanceId, workitemId, sessionId, NEGOTIATION_ORIGINAL_ATTRIBUTE);
+        JsonNode result = noteSheetService.getOriginalNotesheet(resolvedProcessInstanceId, workitemIdResolved, sessionId, NEGOTIATION_ORIGINAL_ATTRIBUTE);
         return ResponseEntity.ok(result);
+    }
+
+    private String firstNonEmpty(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isEmpty()) {
+                return value;
+            }
+        }
+        return null;
     }
 
     @Operation(summary = "Get Document Annotations", description = "Retrieves annotations for a specific document from OmniDocs.")
@@ -113,11 +127,16 @@ public class NegotiationController {
     @Operation(summary = "Debug Work Item", description = "Dumps work item details for debugging.")
     @GetMapping(value = "/debug/workitem", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<JsonNode> debugWorkItem(
-            @RequestParam String workitemId,
-            @RequestParam String processInstanceId,
+            @RequestParam(required = false) String workitemId,
+            @RequestParam(value = "workItemId", required = false) String workitemIdAlt,
+            @RequestParam(required = false) String processInstanceId,
+            @RequestParam(value = "ProcessInstanceId", required = false) String processInstanceIdAlt,
             @RequestHeader("sessionId") long sessionId) {
 
-        String filePath = noteSheetService.dumpWorkItemDetails(processInstanceId, workitemId, sessionId);
+        String resolvedProcessInstanceId = firstNonEmpty(processInstanceId, processInstanceIdAlt);
+        String workitemIdResolved = firstNonEmpty(workitemId, workitemIdAlt);
+
+        String filePath = noteSheetService.dumpWorkItemDetails(resolvedProcessInstanceId, workitemIdResolved, sessionId);
 
         ObjectNode result = mapper.createObjectNode();
         result.put("success", true);
@@ -134,15 +153,20 @@ public class NegotiationController {
     })
     @GetMapping(value = "/getcomments", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<JsonNode> getComments(
-            @RequestParam String workitemId,
-            @RequestParam String processInstanceId,
+            @RequestParam(required = false) String workitemId,
+            @RequestParam(value = "workItemId", required = false) String workitemIdAlt,
+            @RequestParam(required = false) String processInstanceId,
+            @RequestParam(value = "ProcessInstanceId", required = false) String processInstanceIdAlt,
             @RequestHeader("sessionId") long sessionId) {
 
-        if (workitemId == null || workitemId.isEmpty() || processInstanceId == null || processInstanceId.isEmpty()) {
+        String resolvedProcessInstanceId = firstNonEmpty(processInstanceId, processInstanceIdAlt);
+        String workitemIdResolved = firstNonEmpty(workitemId, workitemIdAlt);
+
+        if (workitemIdResolved == null || workitemIdResolved.isEmpty() || resolvedProcessInstanceId == null || resolvedProcessInstanceId.isEmpty()) {
             return ResponseEntity.badRequest().body(createError("Missing parameters"));
         }
 
-        JsonNode attributesResponse = workItemAttributesService.fetchWorkItemAttributes(processInstanceId, workitemId, sessionId);
+        JsonNode attributesResponse = workItemAttributesService.fetchWorkItemAttributes(resolvedProcessInstanceId, workitemIdResolved, sessionId);
         JsonNode result = extractNegotiationComments(attributesResponse);
         return ResponseEntity.ok(result);
     }
@@ -301,15 +325,20 @@ public class NegotiationController {
     })
     @GetMapping(value = "/getnotesheet", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<JsonNode> getNotesheet(
-            @Parameter(description = "Work Item ID", required = true) @RequestParam String workitemId,
-            @Parameter(description = "Process Instance ID", required = true) @RequestParam String processInstanceId,
+            @Parameter(description = "Work Item ID", required = true) @RequestParam(required = false) String workitemId,
+            @Parameter(description = "Work Item ID (alternate casing)") @RequestParam(value = "workItemId", required = false) String workitemIdAlt,
+            @Parameter(description = "Process Instance ID", required = true) @RequestParam(required = false) String processInstanceId,
+            @Parameter(description = "Process Instance ID (alternate casing)") @RequestParam(value = "ProcessInstanceId", required = false) String processInstanceIdAlt,
             @Parameter(description = "Session ID from login", required = true) @RequestHeader("sessionId") long sessionId) {
 
-        if (workitemId == null || workitemId.isEmpty() || processInstanceId == null || processInstanceId.isEmpty()) {
+        String resolvedProcessInstanceId = firstNonEmpty(processInstanceId, processInstanceIdAlt);
+        String workitemIdResolved = firstNonEmpty(workitemId, workitemIdAlt);
+
+        if (workitemIdResolved == null || workitemIdResolved.isEmpty() || resolvedProcessInstanceId == null || resolvedProcessInstanceId.isEmpty()) {
             return ResponseEntity.badRequest().body(createError("Missing required parameters"));
         }
 
-        JsonNode result = noteSheetService.getNotesheet(processInstanceId, workitemId, sessionId);
+        JsonNode result = noteSheetService.getNotesheet(resolvedProcessInstanceId, workitemIdResolved, sessionId);
         return ResponseEntity.ok(result);
     }
 
@@ -331,11 +360,16 @@ public class NegotiationController {
     })
     @PostMapping(value = "/createpdfnote", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<JsonNode> createPdfNote(
-            @Parameter(description = "Work Item ID", required = true) @RequestParam String workitemId,
-            @Parameter(description = "Process Instance ID", required = true) @RequestParam String processInstanceId,
+            @Parameter(description = "Work Item ID", required = true) @RequestParam(required = false) String workitemId,
+            @Parameter(description = "Work Item ID (alternate casing)") @RequestParam(value = "workItemId", required = false) String workitemIdAlt,
+            @Parameter(description = "Process Instance ID", required = true) @RequestParam(required = false) String processInstanceId,
+            @Parameter(description = "Process Instance ID (alternate casing)") @RequestParam(value = "ProcessInstanceId", required = false) String processInstanceIdAlt,
             @Parameter(description = "Optional Session ID from login. If not provided, uses service account.") @RequestHeader(value = "sessionId", required = false) Long providedSessionId) {
 
-        if (workitemId == null || workitemId.isEmpty() || processInstanceId == null || processInstanceId.isEmpty()) {
+        String resolvedProcessInstanceId = firstNonEmpty(processInstanceId, processInstanceIdAlt);
+        String workitemIdResolved = firstNonEmpty(workitemId, workitemIdAlt);
+
+        if (workitemIdResolved == null || workitemIdResolved.isEmpty() || resolvedProcessInstanceId == null || resolvedProcessInstanceId.isEmpty()) {
             return ResponseEntity.badRequest().body(createError("Missing required parameters: workitemId, processInstanceId"));
         }
 
@@ -344,7 +378,7 @@ public class NegotiationController {
             return ResponseEntity.status(401).body(createError("Failed to establish service session"));
         }
 
-        JsonNode result = noteSheetService.createNegotiationPdfNote(processInstanceId, workitemId, sessionId);
+        JsonNode result = noteSheetService.createNegotiationPdfNote(resolvedProcessInstanceId, workitemIdResolved, sessionId);
 
         if (!result.path("success").asBoolean(true)) {
             String error = result.path("error").asText("").toLowerCase();
@@ -354,7 +388,7 @@ public class NegotiationController {
                 sessionManager.invalidateSessionById(sessionId);
                 sessionId = sessionManager.getServiceSession();
                 if (sessionId != null) {
-                    result = noteSheetService.createPdfNote(processInstanceId, workitemId, sessionId);
+                    result = noteSheetService.createNegotiationPdfNote(resolvedProcessInstanceId, workitemIdResolved, sessionId);
                 }
             }
         }
