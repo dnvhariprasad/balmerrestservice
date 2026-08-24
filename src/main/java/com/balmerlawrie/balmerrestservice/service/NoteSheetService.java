@@ -3074,6 +3074,18 @@ public class NoteSheetService extends BaseIbpsService {
         html = html.replaceAll("(?i)margin-left\\s*:\\s*calc\\([^;\"']+\\)\\s*;?", "");
         html = html.replaceAll("(?i)margin-right\\s*:\\s*calc\\([^;\"']+\\)\\s*;?", "");
 
+        // 5d-2. Remove positive margin-left/margin-right specifically on <table> elements.
+        //       Tables are force-set to width:100% via the wrapper CSS below; a leftover
+        //       positive margin then pushes the table past the page's right edge, causing
+        //       Aspose to clip the last few characters off every row (uniform right-edge
+        //       clipping, distinct from the negative-margin case handled in 5d above).
+        html = html.replaceAll(
+                "(?i)(<table[^>]*style\\s*=\\s*[\"'][^\"']*)margin-left\\s*:\\s*[0-9]+\\.?[0-9]*(px|pt|cm|in|mm)\\s*;?",
+                "$1");
+        html = html.replaceAll(
+                "(?i)(<table[^>]*style\\s*=\\s*[\"'][^\"']*)margin-right\\s*:\\s*[0-9]+\\.?[0-9]*(px|pt|cm|in|mm)\\s*;?",
+                "$1");
+
         // 5e. For shorthand margin with negative values, zero out the negative sides
         //     e.g. "margin: 0px -51px 10.6667px -48px" → "margin: 0px 0px 10.6667px 0px"
         {
