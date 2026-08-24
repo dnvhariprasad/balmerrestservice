@@ -36,6 +36,12 @@ public class SessionManager {
     @Value("${service.account.password:}")
     private String serviceAccountPassword;
 
+    @Value("${service.account.backup.username:}")
+    private String backupAccountUsername;
+
+    @Value("${service.account.backup.password:}")
+    private String backupAccountPassword;
+
     /**
      * Cache of sessions keyed by username.
      */
@@ -56,7 +62,12 @@ public class SessionManager {
 
         // Decrypt the password before using it
         String decryptedPassword = EncryptionUtil.decrypt(serviceAccountPassword);
-        return getSession(serviceAccountUsername, decryptedPassword);
+        Long sessionId = getSession(serviceAccountUsername, decryptedPassword);
+        if (sessionId != null) {
+            return sessionId;
+        }
+
+        return getBackupServiceSession();
     }
 
     /**
@@ -71,11 +82,35 @@ public class SessionManager {
             return null;
         }
 
-
         String decryptedPassword = EncryptionUtil.decrypt(serviceAccountPassword);
 
         sessionCache.remove(serviceAccountUsername);
-        return createNewSession(serviceAccountUsername, decryptedPassword);
+        Long sessionId = createNewSession(serviceAccountUsername, decryptedPassword);
+        if (sessionId != null) {
+            return sessionId;
+        }
+
+        sessionCache.remove(backupAccountUsername);
+        return getBackupServiceSession();
+    }
+
+    /**
+     * Falls back to the backup service account when the primary account
+     * (e.g. "supervisor") cannot authenticate, such as when it is locked out.
+     *
+     * @return The session ID from the backup account, or null if unavailable/failed
+     */
+    private Long getBackupServiceSession() {
+        if (backupAccountUsername == null || backupAccountUsername.isEmpty() ||
+                backupAccountPassword == null || backupAccountPassword.isEmpty()) {
+            return null;
+        }
+
+        log.warn("Primary service account '{}' failed to authenticate, falling back to backup account '{}'",
+                serviceAccountUsername, backupAccountUsername);
+
+        String decryptedBackupPassword = EncryptionUtil.decrypt(backupAccountPassword);
+        return getSession(backupAccountUsername, decryptedBackupPassword);
     }
 
     /**
